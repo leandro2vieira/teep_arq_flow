@@ -1,0 +1,151 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.env/
+.venv/
+venv.bak/
+venv-win/
+venv-*/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*,cover
+.pytest_cache/
+pytestdebug.log
+
+# Flask / instance
+instance/
+*.db
+data/*.db
+data/app.db
+
+# Migrations (can be kept if you track them)
+migrations/  # remove if you track migrations in repo
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+*.seed
+celerybeat-schedule
+celerybeat.pid
+gunicorn.pid
+tmp/
+tmp/**
+
+# Static / uploaded files
+uploads/
+uploads/**
+media/
+media/**
+
+# Env files and secrets
+.env
+.env.*
+.flaskenv
+.credentials
+secret_key.txt
+config.py
+
+# Editor and IDE settings
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# macOS / Windows files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Node / frontend artifacts (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+*.tgz
+
+# Docker
+docker-compose.override.yml
+.env.docker
+**/Dockerfile.*.local
+
+# PyCharm specific caches
+*.iml
+out/
+
+# Coverage / profiling
+coverage/
+coverage-html/
+profiler/
+
+# Generated files
+*.bak
+*.swp
+*~
+*.tmp
+
+# OS generated files
+Icon?
+.Spotlight-V100
+.Trashes
+
+# Ignore compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# If you want to allow some files from ignored folders, add negations below.
+# Example: keep a README in data folder
+# !data/README.md
