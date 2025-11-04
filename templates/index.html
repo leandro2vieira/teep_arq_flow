@@ -624,7 +624,7 @@
                 entry.api_save_file = "http://127.0.0.1:8000/production/api/save_new_file/";
                 entry.extension = "NC";
             } else if (type === 'GENERIC_FILE_TRANSFER') {
-                entry.dir_to_save_file = 'machine_code/';
+                entry.local_path = '/home/';
             }
 
             // insert/replace key
@@ -656,7 +656,8 @@
                     password: "pass",
                     private_key_path: "",
                     timeout: 30,
-                    protocol: "sftp"
+                    protocol: "sftp",
+                    local_path: "/home/"
                 };
             } else if (/SCP/.test(key)) {
                 defaults = {
@@ -665,7 +666,8 @@
                     user: "user",
                     password: "pass",
                     timeout: 30,
-                    protocol: "scp"
+                    protocol: "scp",
+                    local_path: "/home/"
                 };
             } else if (/FTP/.test(key) && !/SFTP/.test(key)) {
                 defaults = {
@@ -675,7 +677,8 @@
                     password: "",
                     passive: true,
                     timeout: 30,
-                    protocol: "ftp"
+                    protocol: "ftp",
+                    local_path: "/home/"
                 };
             } else if (/TCP|SERIAL|RS232|RS485/.test(key) || /TCP\/IP/.test(key)) {
                 defaults = {

@@ -5,7 +5,9 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, TYPE_CHECKING
 import pika
-from ftp_manager import FTPManager  # adjust if your FTP manager module has a different name
+import time
+import helpers.helper as helper
+from ftp_manager import FTPManager
 
 if TYPE_CHECKING:
     from setup_config import ConfigManager  # only for type checking to avoid circular imports
@@ -20,6 +22,8 @@ class RabbitMQService:
         self.connection = None
         self.channel = None
         self.running = False
+        self.consumed_queues = set()
+        self.retry_delay = 5
 
         self.rabbitmq_config = config_manager.get('rabbitmq', {
             'host': 'localhost',
@@ -54,14 +58,42 @@ class RabbitMQService:
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
 
-            self.channel.queue_declare(queue='recv_index_1', durable=True)
-            self.channel.queue_declare(queue='send_index_1', durable=True)
-
             logger.info("Conectado ao RabbitMQ")
             return True
         except Exception as e:
             logger.error(f"Erro ao conectar RabbitMQ: {e}")
             return False
+
+    def declare_queues(self):
+        """Declara as filas necessárias"""
+        try:
+            peripherals = self.config_manager.get_peripherals()
+
+            # allow this consumer to receive only one unacked message at a time
+            # set QoS once for the channel
+            self.channel.basic_qos(prefetch_count=1)
+
+            for peripheral in peripherals:
+                json_channel_to_virtual_index = peripheral.get('json_channel_to_virtual_index', {})
+                _index = helper.has_key_with_substring(json_channel_to_virtual_index, 'index')
+                print(f"_index: {_index}")
+
+                recv_queue_name = f"recv_queue_index_{_index}"
+                send_queue_name = f"send_queue_index_{_index}"
+                self.channel.queue_declare(queue=recv_queue_name, durable=False)
+                self.channel.queue_declare(queue=send_queue_name, durable=False)
+
+                if recv_queue_name not in self.consumed_queues:
+                    self.channel.basic_consume(
+                        queue=recv_queue_name,
+                        on_message_callback=self.process_message
+                    )
+                    self.consumed_queues.add(recv_queue_name)
+                    logger.info(f"consuming queue: {recv_queue_name}")
+
+                logger.info(f"Filas declaradas: {recv_queue_name} - {send_queue_name}")
+        except Exception as e:
+            logger.error(f"Erro ao declarar filas: {e}")
 
     def send_message(self, message: Dict[str, Any]):
         """Envia uma mensagem para a fila de saída"""
@@ -199,22 +231,57 @@ class RabbitMQService:
         """Inicia o serviço"""
         self.running = True
 
-        if not self.connect():
-            logger.error("Falha ao iniciar serviço")
-            return
+        while self.running:
+            if not self.connect():
+                logger.error(f"Falha ao iniciar serviço RabbitMQ, tentar novamente em {self.retry_delay} segundos...")
+                time.sleep(self.retry_delay)
+                continue
 
-        self.channel.basic_qos(prefetch_count=1)
-        self.channel.basic_consume(
-            queue='recv_index_1',
-            on_message_callback=self.process_message
-        )
+            try:
+                self.declare_queues()
 
-        logger.info("Serviço RabbitMQ iniciado. Aguardando mensagens...")
+                logger.info("Serviço RabbitMQ iniciado. Aguardando mensagens...")
+
+                self.channel.start_consuming()
+            except KeyboardInterrupt:
+                self.stop()
+            except Exception as e:
+                logger.error(f"Erro no serviço RabbitMQ: {e}")
+                self.reconnect()
+            finally:
+                if not self.running:
+                    break
+
+    def reconnect(self) -> bool:
+        """Fecha conecoes existentes e tenta reconectar"""
+        logger.info(f"Tentando reconectar em {self.retry_delay} segundos...")
 
         try:
-            self.channel.start_consuming()
-        except KeyboardInterrupt:
-            self.stop()
+            if self.channel:
+                try:
+                    self.channel.stop_consuming()
+                except Exception:
+                    pass
+                self.channel = None
+
+            if self.connection:
+                try:
+                    self.connection.close()
+                except Exception:
+                    pass
+                self.connection = None
+        except Exception:
+            pass
+
+        while self.running:
+            if self.connect():
+                logger.info("Conexao com o RabbitMQ restabelecida")
+                return True
+            logger.error(f"Falha ao reconectar. Tentando novamente em {self.retry_delay} segundos...")
+            time.sleep(self.retry_delay)
+
+        logger.info("reconexao abortada porque o servico foi parado")
+        return False
 
     def stop(self):
         """Para o serviço"""
