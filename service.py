@@ -20,7 +20,7 @@ web_service = None  # will hold FlaskWebApp instance
 
 def signal_handler(signum, frame):
     """Manipula sinais do sistema"""
-    logger.info(f"Sinal recebido: {signum}, requisitando desligamento gracioso...")
+    logger.info(f"Sinal recebido: {signum}")
     if rabbitmq_service:
         try:
             rabbitmq_service.stop()
