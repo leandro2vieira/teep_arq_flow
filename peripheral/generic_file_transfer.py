@@ -83,14 +83,21 @@ class GenericFileTransfer:
                 response['action'] = ActionTable.ERROR.value
                 result = f"Comando desconhecido: {action}"
 
-            response['result'] = result
+            response['data']['value'] = result
+
+            value_for_log = response['data']['value']
+            if not isinstance(value_for_log, (str, bytes, int, float, type(None))):
+                try:
+                    value_for_log = json.dumps(value_for_log, default=str)
+                except Exception:
+                    value_for_log = str(value_for_log)
 
             self.send_message(response, f"send_queue_index_{str(self.get_index())}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
             self.config_manager.log_operation(
                 response['action'],
-                response['data']['value'],
+                value_for_log,
                 json.dumps(response)
             )
 
@@ -147,7 +154,7 @@ class GenericFileTransfer:
             response['action'] = ActionTable.FINISH_STREAM_FILE.value
             self.send_message(response, f"send_queue_index_{str(self.get_index())}")
             return success
-        except Excpetion as e:
+        except Exception as e:
             response['action'] = ActionTable.ERROR.value
             response['data']['value'] = str(e)
             self.send_message(response, f"send_queue_index_{str(self.get_index())}")
@@ -173,11 +180,12 @@ class GenericFileTransfer:
         try:
             remote_dir = remote_path
             local_dir = self.local_path
-            success = ftp.download_directory(remote_dir, local_dir)
+            logger.info(f"Downloading directory from {remote_dir} to {local_dir}")
+            success = self.ftp.download_directory(remote_dir, local_dir)
             response['action'] = ActionTable.FINISH_DOWNLOAD_FILE.value
             self.send_message(response, f"send_queue_index_{str(self.get_index())}")
             return success
-        except Excpetion as e:
+        except Exception as e:
             response['action'] = ActionTable.ERROR_DOWNLOAD_FILE.value
             response['data']['value'] = str(e)
             self.send_message(response, f"send_queue_index_{str(self.get_index())}")

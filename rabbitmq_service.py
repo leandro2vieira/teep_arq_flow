@@ -116,7 +116,7 @@ class RabbitMQService:
                 body=json.dumps(message),
                 properties=pika.BasicProperties(delivery_mode=2)
             )
-            logger.info(f"Mensagem enviada: {message.get('command', 'unknown')}")
+            logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
         except Exception as e:
             logger.error(f"Erro ao enviar mensagem: {e}")
 

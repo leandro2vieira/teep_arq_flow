@@ -2,11 +2,22 @@ from pathlib import Path
 from ftplib import FTP, FTP_TLS
 import sys
 import os
+import re
 import logging
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_remote_path(path: str) -> str:
+    """Normalize remote FTP path: convert backslashes, collapse duplicate slashes, strip trailing slash except root."""
+    if path is None:
+        return path
+    p = path.replace('\\', '/')
+    p = re.sub('/+', '/', p)
+    if len(p) > 1 and p.endswith('/'):
+        p = p.rstrip('/')
+    return p
 
 def get_file_tree(path: str, include_hidden: bool = False, max_depth: int = 10) -> dict:
     """
@@ -118,6 +129,7 @@ class FTPManager:
 
     def upload_directory(self, local_dir: str, remote_dir: str) -> bool:
         """Envia uma pasta inteira via FTP"""
+        remote_dir = normalize_remote_path(remote_dir or '')
         try:
             local_path = Path(local_dir)
 
@@ -129,7 +141,7 @@ class FTPManager:
             for item in local_path.rglob('*'):
                 if item.is_file():
                     relative_path = item.relative_to(local_path)
-                    remote_file_path = f"{remote_dir}/{relative_path}".replace('\\', '/')
+                    remote_file_path = normalize_remote_path(f"{remote_dir}/{relative_path}")
                     remote_file_dir = os.path.dirname(remote_file_path)
 
                     self._create_remote_dirs(remote_file_dir)
@@ -155,6 +167,9 @@ class FTPManager:
 
     def _create_remote_dirs(self, remote_path: str):
         """Cria diretórios remotos recursivamente"""
+        remote_path = normalize_remote_path(remote_path or '')
+        if remote_path == '':
+            return
         dirs = remote_path.split('/')
         current = ''
         for d in dirs:
@@ -167,6 +182,7 @@ class FTPManager:
 
     def _download_recursive(self, remote_dir: str, local_dir: str):
         """Baixa arquivos recursivamente"""
+        remote_dir = normalize_remote_path(remote_dir or '.')
         items = []
         self.ftp.retrlines('LIST', items.append)
 
@@ -180,7 +196,7 @@ class FTPManager:
                 continue
 
             if item.startswith('d'):
-                new_remote = f"{remote_dir}/{name}"
+                new_remote = normalize_remote_path(f"{remote_dir}/{name}")
                 new_local = os.path.join(local_dir, name)
                 os.makedirs(new_local, exist_ok=True)
 
@@ -189,9 +205,9 @@ class FTPManager:
                 self._download_recursive(new_remote, new_local)
                 self.ftp.cwd(current_dir)
             else:
-                remote_file = f"{remote_dir}/{name}"
+                new_remote = normalize_remote_path(f"{remote_dir}/{name}")
                 local_file = os.path.join(local_dir, name)
-                self.download_file(remote_file, local_file)
+                self.download_file(new_remote, local_file)
 
     def list_remote(self, remote_dir: str = '.', include_hidden: bool = False) -> list[Dict[str, Any]]:
         """
@@ -199,6 +215,7 @@ class FTPManager:
         Each entry: {name, path, type: 'file'|'directory', size, mtime}
         Tries MLSD (preferable) and falls back to parsing LIST output.
         """
+        remote_dir = normalize_remote_path(remote_dir or '.')
         try:
             entries_lines = []
             # ensure we are in the target dir for MLSD when possible
@@ -227,8 +244,9 @@ class FTPManager:
 
             def make_path(dir_path: str, name: str) -> str:
                 if dir_path in ('', '.', '/'):
-                    return f"/{name}" if dir_path == '/' else name
-                return f"{dir_path.rstrip('/')}/{name}"
+                    base = '/' if dir_path == '/' else ''
+                    return normalize_remote_path(f"{base}{name}")
+                return normalize_remote_path(f"{dir_path.rstrip('/')}/{name}")
 
             if using_mlsd:
                 # MLSD lines have semicolon-separated facts then the name
