@@ -1,9 +1,10 @@
-from helpers.enums import ActionTable
-from ftp_manager import FTPManager, get_file_tree
-from typing import Dict, Any
-from datetime import datetime
-import logging
+import os
 import json
+import logging
+from datetime import datetime
+from typing import Dict, Any
+from ftp_manager import FTPManager
+from helpers.enums import ActionTable
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +18,27 @@ class IO:
         print(f"{config} - IO initialized with index: {self.index}, notification_type: {self.notification_type}, local_path: {self.local_path}", flush=True)
 
 
+# python
+def _handle_list_local_directory(local_path: str) -> Dict:
+    try:
+        entries = []
+        with os.scandir(local_path) as it:
+            for entry in it:
+                info = entry.stat()
+                entries.append({
+                    'name': entry.name,
+                    'is_dir': entry.is_dir(),
+                    'size': info.st_size,
+                    'modified': int(info.st_mtime)
+                })
+        return {'success': True, 'files': entries}
+    except Exception as e:
+        logger.error(f"Erro ao listar diretório local: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 class GenericFileTransfer:
     def __init__(self, config: Dict[str, Any], io_config: Dict[str, Any], send_message_callback, config_manager):
-
         self.host = config.get('host', 'localhost')
         self.port = config.get('port', 21)
         self.user = config.get('user', 'anonymous')
@@ -41,30 +60,61 @@ class GenericFileTransfer:
         self.send_message = send_message_callback
         self.config_manager = config_manager
 
+    # --- helpers ----------------------------------------------------------------
+
     def get_index(self) -> int:
-        """Retorna o índice do IO or None"""
         return self.io.index
 
+    def _build_response(self, action, value=None):
+        return {
+            'action': action,
+            'data': {
+                'index': self.get_index(),
+                'value': value if value is not None else '',
+                'timestamp': int(datetime.now().timestamp())
+            }
+        }
+
+    def _send(self, action, value=None):
+        resp = self._build_response(action, value)
+        self.send_message(resp, f"send_queue_index_{str(self.get_index())}")
+        return resp
+
+    def _join_remote(self, base: str, part: str) -> str:
+        base = (base or '').rstrip('/')
+        part = (part or '').lstrip('/')
+        if base == '':
+            return f"/{part}" if part else '/'
+        return f"{base}/{part}" if part else base
+
+    # Wrapper that ensures FTP connection and disconnect
+    def _with_ftp(self, func, *args, **kwargs):
+        if not self.ftp.connect():
+            return {'success': False, 'error': 'Falha ao conectar FTP'}
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.exception("FTP operation failed: %s", e)
+            return {'success': False, 'error': str(e)}
+        finally:
+            try:
+                self.ftp.disconnect()
+            except Exception:
+                pass
+
+    # --- message processing -----------------------------------------------------
+
     def process_message(self, ch, method, properties, body):
-        """Processa mensagens recebidas"""
         try:
             message = json.loads(body)
             action = message.get('action')
 
             logger.info(f"Mensagem recebida: {action}")
 
-            response = {
-                'action': action,
-                'data': {
-                    'index': self.get_index(),
-                    'value': '',
-                    'timestamp': int(datetime.now().timestamp())
-                }
-            }
+            response = self._build_response(action)
 
             if action == ActionTable.GET_SERVER_FILE_TREE.value:
-                result = get_file_tree(self.local_path, include_hidden=False, max_depth=1)
-                logger.info(f"File tree: {result}")
+                result = _handle_list_local_directory(self.local_path)
                 response['action'] = ActionTable.SERVER_FILE_TREE.value
             elif action == ActionTable.GET_REMOTE_FILE_TREE.value:
                 data = message.get('data', {})
@@ -121,190 +171,78 @@ class GenericFileTransfer:
             logger.error(f"Erro ao processar mensagem: {e}")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
+    # --- handlers ---------------------------------------------------------------
+
     def _handle_upload_directory(self, local_path: str) -> Dict:
-        """Processa upload de diretório"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        response = {
-            'action': ActionTable.START_STREAM_FILE.value,
-            'data': {
-                'index': self.get_index(),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }
-        }
-
-        self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-
-        try:
+        def op():
+            self._send(ActionTable.START_STREAM_FILE.value)
             local_dir = local_path
             remote_dir = self.io.local_path
             success = self.ftp.upload_directory(local_dir, remote_dir)
-            response['action'] = ActionTable.FINISH_STREAM_FILE.value
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
+            self._send(ActionTable.FINISH_STREAM_FILE.value)
             return success
-        except Exception as e:
-            response['action'] = ActionTable.ERROR.value
-            response['data']['value'] = str(e)
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao fazer upload do diretório: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)
 
     def _handle_upload_file(self, local_path: str) -> Dict:
-        """Processa upload de arquivo"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        response = {
-            'action': ActionTable.START_STREAM_FILE.value,
-            'data': {
-                'index': self.get_index(),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }
-        }
-
-        self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-
-        try:
+        def op():
+            self._send(ActionTable.START_STREAM_FILE.value)
             local_file = local_path
-            remote_file = f"{self.io.local_path}/{local_path.split('/')[-1]}"
+            remote_file = self._join_remote(self.io.local_path, os.path.basename(local_path))
             success = self.ftp.upload_file(local_file, remote_file)
-            response['action'] = ActionTable.FINISH_STREAM_FILE.value
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
+            self._send(ActionTable.FINISH_STREAM_FILE.value)
             return success
-        except Exception as e:
-            response['action'] = ActionTable.ERROR.value
-            response['data']['value'] = str(e)
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao fazer upload do arquivo: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)
 
     def _handle_download_directory(self, remote_path) -> Dict:
-        """Processa download de diretório"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        response = {
-            'action': ActionTable.START_DOWNLOAD_FILE.value,
-            'data': {
-                'index': self.get_index(),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }
-        }
-        self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-
-        try:
+        def op():
+            self._send(ActionTable.START_DOWNLOAD_FILE.value)
             remote_dir = remote_path
             local_dir = self.local_path
             logger.info(f"Downloading directory from {remote_dir} to {local_dir}")
             success = self.ftp.download_directory(remote_dir, local_dir)
-            response['action'] = ActionTable.FINISH_DOWNLOAD_FILE.value
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
+            self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
             return success
-        except Exception as e:
-            response['action'] = ActionTable.ERROR_DOWNLOAD_FILE.value
-            response['data']['value'] = str(e)
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao fazer download do diretório: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)
 
     def _handle_download_file(self, remote_path: str) -> Dict:
-        """Processa download de arquivo"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        response = {
-            'action': ActionTable.START_DOWNLOAD_FILE.value,
-            'data': {
-                'index': self.get_index(),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }
-        }
-        self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-
-        try:
+        def op():
+            self._send(ActionTable.START_DOWNLOAD_FILE.value)
             remote_file = remote_path
-            local_file = f"{self.local_path}/{remote_path.split('/')[-1]}"
+            local_file = os.path.join(self.local_path, os.path.basename(remote_path))
             logger.info(f"Downloading file from {remote_file} to {local_file}")
             success = self.ftp.download_file(remote_file, local_file)
-            response['action'] = ActionTable.FINISH_DOWNLOAD_FILE.value
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
+            self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
             return success
-        except Exception as e:
-            response['action'] = ActionTable.ERROR_DOWNLOAD_FILE.value
-            response['data']['value'] = str(e)
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao fazer download do arquivo: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)
 
     def _handle_delete_remote_file(self, remote_path: str) -> Dict:
-        """Deleta um arquivo remoto"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        try:
-            success = self.ftp.delete_remote_file(remote_path)
+        def op():
+            # use FTPManager.delete_file (refactored name)
+            success = self.ftp.delete_file(remote_path)
+            if isinstance(success, bool):
+                return {'success': success}
             return success
-        except Exception as e:
-            response = {'action': ActionTable.ERROR.value, 'data': {
-                'index': str(e),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }}
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao deletar arquivo remoto: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)
 
     def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
-        """Deleta um diretório remoto"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        try:
+        def op():
             success = self.ftp.delete_remote_path(remote_path)
+            if isinstance(success, bool):
+                return {'success': success}
             return success
-        except Exception as e:
-            response = {'action': ActionTable.ERROR.value, 'data': {
-                'index': str(e),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }}
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao deletar diretório remoto: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)
 
     def _handle_list_directory(self, remote_path: str) -> Dict:
-        """Lista arquivos em um diretório remoto"""
-        if not self.ftp.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
-
-        try:
-            file_list = self.ftp.list_remote(f'{self.io.local_path}{remote_path}')
+        def op():
+            # join configured base path and requested remote path cleanly
+            full_remote = self._join_remote(self.io.local_path, remote_path)
+            file_list = self.ftp.list_remote(full_remote)
             return file_list
-        except Exception as e:
-            response = {'action': ActionTable.ERROR.value, 'data': {
-                'index': str(e),
-                'value': '',
-                'timestamp': int(datetime.now().timestamp())
-            }}
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
-            logger.error(f"Erro ao listar diretório remoto: {e}")
-            return {'success': False, 'error': str(e)}
-        finally:
-            self.ftp.disconnect()
+
+        return self._with_ftp(op)

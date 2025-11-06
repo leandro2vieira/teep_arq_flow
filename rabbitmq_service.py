@@ -6,9 +6,6 @@ from typing import Dict, Any, TYPE_CHECKING
 import pika
 import time
 import os
-import helpers.helper as helper
-from ftp_manager import FTPManager, get_file_tree
-from helpers.enums import ActionTable
 from peripheral.generic_file_transfer import GenericFileTransfer
 
 if TYPE_CHECKING:
