@@ -104,6 +104,57 @@ class RabbitMQService:
 
             logger.info(f"Filas declaradas: {recv_queue_name} - {send_queue_name}")
 
+    def reconnect_now(self) -> bool:
+        """Force re-establish the RabbitMQ connection immediately.
+
+        Safely stops consuming and closes any existing connection/channel,
+        then tries to connect once and redeclare queues. Returns True on success.
+        """
+        logger.info("Forcing RabbitMQ reconnection now...")
+        return
+        try:
+            # Stop and clear existing channel
+            if self.channel:
+                try:
+                    self.channel.stop_consuming()
+                except Exception:
+                    pass
+                self.channel = None
+
+            # Close and clear existing connection
+            if self.connection:
+                try:
+                    self.connection.close()
+                except Exception:
+                    pass
+                self.connection = None
+
+            # Try to connect once
+            if not self.connect():
+                logger.error("reconnect_now: connect() failed")
+                return False
+
+            # Redeclare queues for current configuration
+            try:
+                self.declare_queues()
+            except Exception as e:
+                logger.error(f"reconnect_now: error declaring queues: {e}")
+                # close connection on failure to avoid half-open state
+                try:
+                    if self.connection:
+                        self.connection.close()
+                except Exception:
+                    pass
+                self.connection = None
+                self.channel = None
+                return False
+
+            logger.info("reconnect_now: reconnection successful")
+            return True
+        except Exception as e:
+            logger.error(f"reconnect_now: unexpected error: {e}")
+            return False
+
     def send_message(self, message: Dict[str, Any], routing_key: str = None):
         """Envia uma mensagem para a fila de saída"""
         try:

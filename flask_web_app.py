@@ -4,6 +4,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 from werkzeug.serving import make_server
 import logging
 from pathlib import Path
+from threading import Thread
 
 configure_logging(app_name="rabbitmq_ftp_service", level="INFO")
 logger = logging.getLogger(__name__)
@@ -19,7 +20,21 @@ class FlaskWebApp:
         self.app = Flask(__name__, template_folder=templates_dir)
         self.app.secret_key = 'rabbitmq-ftp-service-secret-key'
         self.server = None
+        self.rabbitmq_service = None  # will be set from outside if available
         self._setup_routes()
+
+    def set_rabbitmq_service(self, rabbitmq_service):
+        """Provide the RabbitMQService instance so endpoints can trigger reconnects."""
+        self.rabbitmq_service = rabbitmq_service
+
+    def _trigger_rabbit_reconnect(self):
+        """Call reconnect_now in a background thread if rabbitmq_service is available."""
+        if getattr(self, "rabbitmq_service", None):
+            try:
+                Thread(target=self.rabbitmq_service.reconnect_now, daemon=True).start()
+            except Exception:
+                logger.exception("Failed to start rabbitmq reconnect thread")
+
 
     def _setup_routes(self):
         """Configura as rotas da aplicação"""
@@ -113,6 +128,7 @@ class FlaskWebApp:
                     model=data.get('model'),
                     json_channel_to_virtual_index=data.get('json_channel_to_virtual_index')
                 )
+                self._trigger_rabbit_reconnect()
                 return jsonify({'id': pid, 'message': 'Peripheral created'}), 201
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
@@ -131,6 +147,7 @@ class FlaskWebApp:
                     model=data.get('model'),
                     json_channel_to_virtual_index=data.get('json_channel_to_virtual_index')
                 )
+                self._trigger_rabbit_reconnect()
                 return jsonify({'message': 'Peripheral updated'})
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
@@ -139,6 +156,7 @@ class FlaskWebApp:
         def delete_peripheral(peripheral_id):
             try:
                 self.config_manager.delete_peripheral(peripheral_id)
+                self._trigger_rabbit_reconnect()
                 return jsonify({'message': 'Peripheral deleted'})
             except Exception as e:
                 return jsonify({'error': str(e)}), 400

@@ -43,15 +43,16 @@ def main():
     # Obter porta da web do config ou usar padrão
     web_port = config_manager.get('web_port', 5000)
 
-    # Iniciar servidor web em thread separada
-    web_service = FlaskWebApp(config_manager, web_port)
-    web_thread = Thread(target=web_service.start, daemon=True)
-    web_thread.start()
-
     # Iniciar serviço RabbitMQ na thread principal
     rabbitmq_service = RabbitMQService(config_manager)
     rabbitmq_thread = Thread(target=rabbitmq_service.start, daemon=True)
     rabbitmq_thread.start()
+
+    # Iniciar servidor web em thread separada
+    web_service = FlaskWebApp(config_manager, web_port)
+    web_service.set_rabbitmq_service(rabbitmq_service)
+    web_thread = Thread(target=web_service.start, daemon=True)
+    web_thread.start()
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
