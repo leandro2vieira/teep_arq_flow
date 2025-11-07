@@ -73,17 +73,6 @@
     transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
   }
 
-  /* Focus state — clear visual indication */
-  input[type="text"]:focus,
-  input[type="number"]:focus,
-  textarea:focus,
-  select:focus {
-    border-color: var(--accent-2);
-    box-shadow: 0 8px 24px rgba(47,111,184,0.08), inset 0 1px 0 rgba(255,255,255,0.02);
-    background: linear-gradient(180deg, rgba(127,182,255,0.02), rgba(255,255,255,0.01));
-    color: #eaf6ff;
-  }
-
   /* Placeholder color */
   input::placeholder,
   textarea::placeholder {
@@ -102,12 +91,19 @@
     background-repeat: no-repeat;
   }
 
-  /* Slightly increase contrast for disabled/read-only fields */
-  input[disabled], textarea[disabled], select[disabled],
-  input[readonly], textarea[readonly], select[readonly] {
-    opacity: 0.9;
-    background: rgba(255,255,255,0.01);
-    color: rgba(215,221,227,0.7);
+  /* Disabled / readonly */
+  input[disabled], textarea[disabled],
+  input[readonly], textarea[readonly], select[disabled],
+  select[readonly] {
+    opacity: 0.85;
+    background-color: rgba(255,255,255,0.01);
+    color: rgba(200,206,214,0.6);
+    cursor: not-allowed;
+  }
+
+  select option {
+    background: var(--panel);
+    color: #e6eef8;
   }
 
   textarea{min-height:96px;font-family:inherit}
@@ -132,7 +128,57 @@
     margin-bottom: 12px;
   }
 
-  /* Ensure form groups and inputs can shrink inside grid cells */
+  /* Flat button base */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: transparent; /* flat */
+    color: #dfeff9;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease, transform 80ms ease;
+    box-shadow: none; /* remove elevation */
+  }
+
+  /* Hover / active states for flat buttons */
+  .btn:hover {
+    background: rgba(255,255,255,0.02);
+    border-color: rgba(255,255,255,0.09);
+    transform: translateY(-1px);
+  }
+  .btn:active { transform: translateY(0); }
+
+  /* Primary flat button */
+  .btn.primary {
+    background: var(--accent-2);
+    color: #071226;
+    border-color: rgba(0,0,0,0.08);
+    box-shadow: none;
+  }
+  .btn.primary:hover {
+    filter: brightness(0.98);
+    transform: translateY(-1px);
+  }
+
+  /* Ghost / subtle button */
+  .btn.ghost {
+    background: transparent;
+    border-style: dashed;
+    border-color: rgba(255,255,255,0.04);
+    color: var(--muted);
+  }
+
+  /* Small responsive adjustments */
+  @media (max-width:600px) {
+    .btn { padding: 8px 10px; font-size: 0.95rem; }
+    input[type="text"], input[type="number"], textarea, select { padding: 8px 10px; }
+  }
+
   /* Keep labels compact so they don't force column width */
   .form-group > label {
     display: block;
@@ -141,32 +187,55 @@
     text-overflow: ellipsis;
     margin-bottom: 6px;
   }
+
+  /* If select arrow spacing isn't needed for all, limit the extra padding to select only */
+  select { padding-right: 36px; }
   input[type="text"],
   input[type="number"],
   textarea,
   select {
-    box-sizing: border-box; /* include padding/border in width calculations */
-    min-width: 0;           /* allow to shrink inside grid cell */
-    max-width: 100%;
-    width: 100%;
-    padding: 10px;
-    padding-right: 36px;
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.02);
-    color: #e6eef8;
-    outline: none;
-    font-family: inherit;
-    box-shadow: inset 0 2px 6px rgba(0,0,0,0.6);
-    transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
-  }
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
 
-  /* If select arrow spacing isn't needed for all, limit the extra padding to select only */
-  select { padding-right: 36px; }
-  input[type="text"], input[type="number"], textarea { padding-right: 12px; }
+    /* dark, high-contrast panel */
+    background-color: var(--panel-2);
+    color: #e6eef8;
+    border: 1px solid rgba(127,182,255,0.14);
+    border-radius: 8px;
+    padding: 10px 36px 10px 12px;
+    font-family: inherit;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+
+    /* high-contrast arrow using accent color */
+    background-image:
+      linear-gradient(45deg, transparent 50%, rgba(127,182,255,0.95) 50%),
+      linear-gradient(135deg, rgba(127,182,255,0.95) 50%, transparent 50%);
+    background-position: calc(100% - 14px) calc(50% - 3px), calc(100% - 9px) calc(50% - 3px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+  }
 
   /* Keep textarea height and behaviour */
   textarea { min-height: 96px; font-family: inherit; resize: vertical; }
+
+  input[type="text"]:focus,
+  input[type="number"]:focus,
+  textarea:focus,
+  input[type="text"]:focus-visible,
+  input[type="number"]:focus-visible,
+  textarea:focus-visible,
+  select:focus,
+  select:focus-visible {
+    outline: none;
+    border-color: var(--accent-2);
+    box-shadow: 0 0 0 3px rgba(127,182,255,0.06);
+    background-color: rgba(127,182,255,0.02);
+    color: #f2fbff;
+  }
 </style>
 </head>
 <body>
@@ -253,7 +322,7 @@
             <label>Interface</label>
             <select id="peripheralInterface">
               <option value="">-- Selecionar --</option>
-              <option value="TCPIP">TCP/IP Serial</option>
+              <option value="TCPIP">TCP/IP</option>
               <option value="FTP">FTP</option>
               <option value="SCP">SCP</option>
             </select>
