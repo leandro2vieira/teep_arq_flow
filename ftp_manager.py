@@ -30,9 +30,9 @@ class FTPManager:
         self.port = port
         self.user = user
         self.password = password
-        self.use_tls = use_tls
         self.timeout = timeout
         self.passive = passive
+        self.use_tls = use_tls
         self.ftp: Optional[FTP] = None
 
     def connect(self) -> bool:

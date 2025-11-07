@@ -17,13 +17,15 @@ logger = logging.getLogger(__name__)
 class SCPManager:
     """Manager for transferring files over SSH/SCP (SFTP fallback)."""
 
-    def __init__(self, config: Dict[str, Any]):
-        self.host = config.get('host')
-        self.port = int(config.get('port', 22))
-        self.user = config.get('user')
-        self.password = config.get('password')
-        self.key_filename = config.get('key_filename')  # optional path to private key
-        self.timeout = config.get('timeout', 30)
+    def __init__(self, host: str, port: int = 22, user: str = '',
+                 password: str = '', timeout: int = 30):
+        self.host = host
+        self.port = port
+        self.user = user
+        self.password = password
+        self.timeout = timeout
+        self.key_filename = None  # optional path to private key
+        self.timeout = timeout
         self.ssh: paramiko.SSHClient | None = None
         self.sftp: paramiko.SFTPClient | None = None
         self.scp: SCPClient | None = None
@@ -202,6 +204,71 @@ class SCPManager:
                         self.sftp.get(remote_path, local_path)
             except Exception as e:
                 logger.error("_download_recursive error: %s", e)
+
+    def list_remote(self, remote_path: str = ".", recursive: bool = False, max_depth: int = 3, max_entries: int = 1000) -> list[Dict[str, Any]]:
+        """
+        List remote directory contents without downloading.
+
+        Parameters:
+        - remote_path: remote directory to list (default: ".")
+        - recursive: if True, recurse into subdirectories up to max_depth
+        - max_depth: maximum recursion depth (root is depth 0)
+        - max_entries: global limit of returned entries to avoid huge listings
+
+        Returns:
+        - A list of dicts: { 'name', 'path', 'is_dir', 'size', 'children' (optional) }
+        """
+        results: list[Dict[str, Any]] = []
+        if not remote_path:
+            remote_path = "."
+
+        # ensure connection
+        if not self.sftp or not self.ssh:
+            if not self.connect():
+                logger.error("list_remote: not connected and connect() failed")
+                return results
+
+        seen = 0
+
+        def _walk(path: str, depth: int) -> list[Dict[str, Any]]:
+            nonlocal seen
+            entries: list[Dict[str, Any]] = []
+            if seen >= max_entries:
+                return entries
+            try:
+                attrs = self.sftp.listdir_attr(path)
+            except FileNotFoundError:
+                logger.error("list_remote: remote path not found: %s", path)
+                return entries
+            except Exception as e:
+                logger.error("list_remote: error listing %s: %s", path, e)
+                return entries
+
+            for attr in attrs:
+                if seen >= max_entries:
+                    break
+                name = getattr(attr, "filename", None)
+                if not name or name in ('.', '..'):
+                    continue
+                is_dir = stat_is_dir(attr)
+                item_path = f"{path.rstrip('/')}/{name}" if path != "/" else f"/{name}"
+                item: Dict[str, Any] = {
+                    "name": name,
+                    "path": item_path,
+                    "is_dir": bool(is_dir),
+                    "size": getattr(attr, "st_size", None),
+                }
+                if is_dir and recursive and depth < max_depth:
+                    item["children"] = _walk(item_path, depth + 1)
+                entries.append(item)
+                seen += 1
+            return entries
+
+        try:
+            results = _walk(remote_path, 0)
+        except Exception as e:
+            logger.error("list_remote: unexpected error: %s", e)
+        return results
 
 # Helper to detect directory from SFTPAttributes safely
 def stat_is_dir(attr: paramiko.SFTPAttributes) -> bool:

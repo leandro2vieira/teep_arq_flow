@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List
 from ftp_manager import FTPManager
+from scp_manager import SCPManager
 from helpers.enums import ActionTable
 
 logger = logging.getLogger(__name__)
@@ -47,13 +48,24 @@ class GenericFileTransfer:
         self.timeout = config.get('timeout', 30)
         self.protocol = config.get('protocol', 'ftp')
         self.local_path = config.get('local_path', './')
+        self.remote = None
 
-        self.ftp = FTPManager(
-            host=self.host,
-            port=self.port,
-            user=self.user,
-            password=self.password
-        )
+        if self.protocol.lower() == 'scp':
+            self.remote = SCPManager(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                timeout=self.timeout
+            )
+        else:
+            self.remote = FTPManager(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                timeout=self.timeout
+            )
 
         self.io: IO = IO(io_config.get('GENERIC_FILE_TRANSFER', {}))
 
@@ -89,7 +101,7 @@ class GenericFileTransfer:
 
     # Wrapper that ensures FTP connection and disconnect
     def _with_ftp(self, func, *args, **kwargs):
-        if not self.ftp.connect():
+        if not self.remote.connect():
             return {'success': False, 'error': 'Falha ao conectar FTP'}
         try:
             return func(*args, **kwargs)
@@ -98,7 +110,7 @@ class GenericFileTransfer:
             return {'success': False, 'error': str(e)}
         finally:
             try:
-                self.ftp.disconnect()
+                self.remote.disconnect()
             except Exception:
                 pass
 
@@ -178,7 +190,7 @@ class GenericFileTransfer:
             self._send(ActionTable.START_STREAM_FILE.value)
             local_dir = local_path
             remote_dir = self.io.local_path
-            success = self.ftp.upload_directory(local_dir, remote_dir)
+            success = self.remote.upload_directory(local_dir, remote_dir)
             self._send(ActionTable.FINISH_STREAM_FILE.value)
             return success
 
@@ -189,7 +201,7 @@ class GenericFileTransfer:
             self._send(ActionTable.START_STREAM_FILE.value)
             local_file = local_path
             remote_file = self._join_remote(self.io.local_path, os.path.basename(local_path))
-            success = self.ftp.upload_file(local_file, remote_file)
+            success = self.remote.upload_file(local_file, remote_file)
             self._send(ActionTable.FINISH_STREAM_FILE.value)
             return success
 
@@ -201,7 +213,7 @@ class GenericFileTransfer:
             remote_dir = remote_path
             local_dir = self.local_path
             logger.info(f"Downloading directory from {remote_dir} to {local_dir}")
-            success = self.ftp.download_directory(remote_dir, local_dir)
+            success = self.remote.download_directory(remote_dir, local_dir)
             self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
             return success
 
@@ -213,7 +225,7 @@ class GenericFileTransfer:
             remote_file = remote_path
             local_file = os.path.join(self.local_path, os.path.basename(remote_path))
             logger.info(f"Downloading file from {remote_file} to {local_file}")
-            success = self.ftp.download_file(remote_file, local_file)
+            success = self.remote.download_file(remote_file, local_file)
             self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
             return success
 
@@ -222,7 +234,7 @@ class GenericFileTransfer:
     def _handle_delete_remote_file(self, remote_path: str) -> Dict:
         def op():
             # use FTPManager.delete_file (refactored name)
-            success = self.ftp.delete_file(remote_path)
+            success = self.remote.delete_file(remote_path)
             if isinstance(success, bool):
                 return {'success': success}
             return success
@@ -231,7 +243,7 @@ class GenericFileTransfer:
 
     def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
         def op():
-            success = self.ftp.delete_remote_path(remote_path)
+            success = self.remote.delete_remote_path(remote_path)
             if isinstance(success, bool):
                 return {'success': success}
             return success
@@ -242,7 +254,7 @@ class GenericFileTransfer:
         def op():
             # join configured base path and requested remote path cleanly
             full_remote = self._join_remote(self.io.local_path, remote_path)
-            file_list = self.ftp.list_remote(full_remote)
+            file_list = self.remote.list_remote(full_remote)
             return file_list
 
         return self._with_ftp(op)
