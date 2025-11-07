@@ -1,1118 +1,576 @@
+<!-- html -->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>teepArchieveFlow</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>teepArchieveFlow — Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0c0e10;
+    --panel:#111418;
+    --panel-2:#161920;
+    --accent:#c7d200;
+    --accent-2:#7fb6ff;
+    --muted:#9aa3ad;
+    --glass: rgba(255,255,255,0.02);
+    --card-shadow: 0 18px 60px rgba(0,0,0,0.6);
+    font-family: "Roboto Mono", Menlo, monospace;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#090a0b 0%,#0f1113 100%);color:#d6dde6;-webkit-font-smoothing:antialiased;}
+  .shell{max-width:1400px;margin:28px auto;border-radius:10px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);box-shadow:var(--card-shadow);border:1px solid rgba(255,255,255,0.03);}
+  header.console{display:flex;align-items:center;gap:16px;padding:18px 24px;background:linear-gradient(135deg,#1b1f23,#0f1316);border-bottom:1px solid rgba(255,255,255,0.03);}
+  .logo{display:flex;align-items:center;gap:12px}
+  .logo svg{width:48px;height:48px;filter:drop-shadow(0 6px 12px rgba(0,0,0,0.6))}
+  .title{font-size:1.4rem;font-weight:800;color:#e6e9ee}
+  .subtitle{font-size:0.85rem;color:var(--muted);margin-top:2px}
+  .top-controls{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .led{width:12px;height:12px;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.8);border:1px solid rgba(255,255,255,0.06)}
+  .led.online{background:linear-gradient(180deg,var(--accent),#8fb100);box-shadow:0 0 8px rgba(199,210,0,0.45)}
+  .panel{display:grid;grid-template-columns:320px 1fr;min-height:560px}
+  nav.side{padding:18px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);border-right:1px solid rgba(255,255,255,0.03)}
+  .nav-section{margin-bottom:18px}
+  .nav-section h3{margin:0 0 10px 0;font-size:0.9rem;color:var(--muted)}
+  .nav-btn{display:flex;align-items:center;gap:10px;padding:12px 10px;border-radius:8px;background:transparent;color:#d7dde3;border:1px solid transparent;cursor:pointer;font-weight:700;text-align:left}
+  .nav-btn:hover{background:rgba(255,255,255,0.02);border-color:rgba(255,255,255,0.02)}
+  .nav-btn.active{background:linear-gradient(90deg, rgba(127,182,255,0.04), rgba(199,210,0,0.03));border-color:rgba(127,182,255,0.06);color:var(--accent-2)}
+  main.content{padding:22px;background:linear-gradient(180deg,rgba(255,255,255,0.005),transparent)}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px}
+  .btn{background:var(--panel-2);color:#d9dee3;border:1px solid rgba(255,255,255,0.03);padding:10px 14px;border-radius:8px;cursor:pointer;font-weight:800;letter-spacing:0.6px}
+  .btn.primary{background:linear-gradient(180deg,var(--accent-2),#2f6fb8);color:#081223;box-shadow:0 6px 18px rgba(47,111,184,0.12)}
+  .btn.ghost{background:transparent;border:1px dashed rgba(255,255,255,0.03);color:var(--muted)}
+  .status-badge{display:inline-flex;gap:8px;align-items:center;background:var(--glass);padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,0.03);color:var(--muted);font-weight:700;font-size:0.85rem}
+  table{width:100%;border-collapse:collapse;margin-top:10px;background:transparent}
+  th,td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,0.02);font-size:0.95rem;color:#cfe6ff}
+  th{color:var(--muted);font-weight:800;font-size:0.85rem}
+  tbody tr:hover{background:rgba(255,255,255,0.01)}
+  .empty-state{padding:36px;text-align:center;color:var(--muted)}
+  .modal{position:fixed;inset:0;display:none;justify-content:center;align-items:center;background:rgba(0,0,0,0.6);z-index:999}
+  .modal.active{display:flex}
+  .modal-card{width:720px;max-width:96%;background:linear-gradient(180deg,#0f1316,#13171a);border-radius:10px;padding:18px;border:1px solid rgba(255,255,255,0.04);box-shadow:0 20px 60px rgba(0,0,0,0.7)}
+  .modal-card h2{margin:0 0 10px 0;color:var(--accent-2);font-weight:800}
+  .form-group{margin-bottom:12px}
+  label{display:block;font-size:0.85rem;color:var(--muted);margin-bottom:6px;font-weight:700}
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
+  /* Inputs / selects / textarea — increased contrast, subtle depth, clear focus */
+  input[type="text"],
+  input[type="number"],
+  textarea,
+  select {
+    width: 100%;
+    padding: 10px;
+    padding-right: 36px; /* room for select arrow */
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08); /* stronger border for contrast */
+    background: rgba(255,255,255,0.02); /* subtle panel background */
+    color: #e6eef8; /* brighter text */
+    outline: none;
+    font-family: inherit;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.6); /* depth */
+    transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            overflow: hidden;
-        }
+  /* Focus state — clear visual indication */
+  input[type="text"]:focus,
+  input[type="number"]:focus,
+  textarea:focus,
+  select:focus {
+    border-color: var(--accent-2);
+    box-shadow: 0 8px 24px rgba(47,111,184,0.08), inset 0 1px 0 rgba(255,255,255,0.02);
+    background: linear-gradient(180deg, rgba(127,182,255,0.02), rgba(255,255,255,0.01));
+    color: #eaf6ff;
+  }
 
-        header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
+  /* Placeholder color */
+  input::placeholder,
+  textarea::placeholder {
+    color: rgba(231,240,250,0.45);
+  }
 
-        header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
+  /* Make native select arrow visible and higher contrast */
+  select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, rgba(255,255,255,0.8) 50%),
+                      linear-gradient(135deg, rgba(255,255,255,0.8) 50%, transparent 50%);
+    background-position: calc(100% - 14px) calc(1em + 2px), calc(100% - 9px) calc(1em + 2px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+  }
 
-        header p {
-            opacity: 0.9;
-            font-size: 1.1em;
-        }
+  /* Slightly increase contrast for disabled/read-only fields */
+  input[disabled], textarea[disabled], select[disabled],
+  input[readonly], textarea[readonly], select[readonly] {
+    opacity: 0.9;
+    background: rgba(255,255,255,0.01);
+    color: rgba(215,221,227,0.7);
+  }
 
-        .tabs {
-            display: flex;
-            background: #f5f5f5;
-            border-bottom: 2px solid #ddd;
-            overflow-x: auto;
-        }
+  textarea{min-height:96px;font-family:inherit}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .kbd{margin-left:auto;font-size:0.75rem;color:var(--muted);background:rgba(255,255,255,0.02);padding:4px 8px;border-radius:6px}
+  @media (max-width:900px){.panel{grid-template-columns:1fr}nav.side{order:2;display:flex;gap:8px;overflow:auto;padding:12px}}
 
-        .tab {
-            padding: 15px 30px;
-            cursor: pointer;
-            border: none;
-            background: none;
-            font-size: 1em;
-            font-weight: 600;
-            color: #666;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
+  /* Ensure form grid columns can shrink (prevent overlap) */
+  .form-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); /* responsive: two columns when space, stack when narrow */
+    gap: 10px;
+    align-items: start;
+    width: 100%;
+    box-sizing: border-box;
+  }
 
-        .tab:hover {
-            background: #e0e0e0;
-        }
+  /* Ensure children inside grid cells can shrink and won't cause overflow */
+  .form-group {
+    min-width: 0;      /* critical to allow grid items to shrink */
+    overflow: hidden;  /* prevent inner content from breaking layout */
+    margin-bottom: 12px;
+  }
 
-        .tab.active {
-            background: white;
-            color: #667eea;
-            border-bottom: 3px solid #667eea;
-        }
+  /* Ensure form groups and inputs can shrink inside grid cells */
+  /* Keep labels compact so they don't force column width */
+  .form-group > label {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 6px;
+  }
+  input[type="text"],
+  input[type="number"],
+  textarea,
+  select {
+    box-sizing: border-box; /* include padding/border in width calculations */
+    min-width: 0;           /* allow to shrink inside grid cell */
+    max-width: 100%;
+    width: 100%;
+    padding: 10px;
+    padding-right: 36px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.02);
+    color: #e6eef8;
+    outline: none;
+    font-family: inherit;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.6);
+    transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  }
 
-        .content {
-            padding: 30px;
-        }
+  /* If select arrow spacing isn't needed for all, limit the extra padding to select only */
+  select { padding-right: 36px; }
+  input[type="text"], input[type="number"], textarea { padding-right: 12px; }
 
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-            animation: fadeIn 0.3s;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 1em;
-            font-weight: 600;
-            transition: all 0.3s;
-            margin: 5px;
-        }
-
-        .btn-primary {
-            background: #667eea;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #5568d3;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-success {
-            background: #48bb78;
-            color: white;
-        }
-
-        .btn-success:hover {
-            background: #38a169;
-        }
-
-        .btn-danger {
-            background: #f56565;
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background: #e53e3e;
-        }
-
-        .btn-secondary {
-            background: #718096;
-            color: white;
-        }
-
-        .btn-secondary:hover {
-            background: #4a5568;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        th {
-            background: #667eea;
-            color: white;
-            padding: 15px;
-            text-align: left;
-            font-weight: 600;
-        }
-
-        td {
-            padding: 12px 15px;
-            border-bottom: 1px solid #eee;
-        }
-
-        tr:hover {
-            background: #f7fafc;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #333;
-        }
-
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 1em;
-            transition: all 0.3s;
-        }
-
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-
-        .form-group input[type="checkbox"] {
-            width: auto;
-            margin-right: 8px;
-        }
-
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.5);
-            z-index: 1000;
-            animation: fadeIn 0.3s;
-        }
-
-        .modal.active {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .modal-content {
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            max-width: 600px;
-            width: 90%;
-            max-height: 90vh;
-            overflow-y: auto;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            animation: slideUp 0.3s;
-        }
-
-        @keyframes slideUp {
-            from { transform: translateY(50px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-
-        .modal-header {
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #eee;
-        }
-
-        .modal-header h2 {
-            color: #667eea;
-        }
-
-        .status-badge {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            font-weight: 600;
-        }
-
-        .status-active {
-            background: #c6f6d5;
-            color: #22543d;
-        }
-
-        .status-inactive {
-            background: #fed7d7;
-            color: #742a2a;
-        }
-
-        .status-success {
-            background: #c6f6d5;
-            color: #22543d;
-        }
-
-        .status-error {
-            background: #fed7d7;
-            color: #742a2a;
-        }
-
-        .actions {
-            display: flex;
-            gap: 5px;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #666;
-        }
-
-        .loading::after {
-            content: '';
-            display: inline-block;
-            width: 40px;
-            height: 40px;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #666;
-        }
-
-        .empty-state svg {
-            width: 80px;
-            height: 80px;
-            margin-bottom: 20px;
-            opacity: 0.3;
-        }
-
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-        }
-
-        @media (max-width: 768px) {
-            .grid-2 {
-                grid-template-columns: 1fr;
-            }
-
-            .tabs {
-                flex-direction: column;
-            }
-
-            header h1 {
-                font-size: 1.8em;
-            }
-
-            .actions {
-                flex-direction: column;
-            }
-        }
-
-        .alert {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
-        .alert-success {
-            background: #c6f6d5;
-            color: #22543d;
-            border: 1px solid #9ae6b4;
-        }
-
-        .alert-error {
-            background: #fed7d7;
-            color: #742a2a;
-            border: 1px solid #fc8181;
-        }
-    </style>
+  /* Keep textarea height and behaviour */
+  textarea { min-height: 96px; font-family: inherit; resize: vertical; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🚀 Serviço de Envio de Arquivos</h1>
-            <p>Gerenciamento de Periféricos e Configurações</p>
-        </header>
+  <div class="shell" role="application">
+    <header class="console" role="banner">
+      <div class="logo" aria-hidden>
+        <!-- teep icon -->
+        <svg width="239" height="73" viewBox="0 0 239 73" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M56.4 54.9999H2V2.3999H56.4V9.8999H9.5V47.4999H56.4V54.9999Z" fill="white"/>
+            <path d="M2.39999 54.5999H55.9V47.9999H9.5C9.2 47.9999 9 47.7999 9 47.4999V9.8999C9 9.5999 9.2 9.3999 9.5 9.3999H55.9V2.7999H2.39999V54.5999ZM56.4 55.4999H2C1.7 55.4999 1.5 55.2999 1.5 54.9999V2.3999C1.5 2.0999 1.7 1.8999 2 1.8999H56.4C56.7 1.8999 56.9 2.0999 56.9 2.3999V9.8999C56.9 10.1999 56.7 10.3999 56.4 10.3999H10V46.9999H56.4C56.7 46.9999 56.9 47.1999 56.9 47.4999V54.9999C56.9 55.2999 56.6 55.4999 56.4 55.4999Z" fill="white"/>
+            <path d="M16.5 31.8001L26.6 22.5001L42.1 27.9001L56.4 13.1001L61.1 17.7001L43.9 35.6001L28.1 30.0001L20.9 36.6001L16.5 31.8001Z" fill="#85C5A7"/>
+            <path d="M84.0996 33.9998V33.0998ZM164.8 38.8998C165.4 41.0998 166.6 42.7998 168.3 43.8998C170.4 45.1998 172.9 45.8998 175.8 45.8998C178.1 45.8998 180.3 45.5998 182.4 44.8998C184.5 44.1998 186.1 43.4998 187.4 42.7998C188.2 43.2998 188.9 43.9998 189.4 44.8998C189.9 45.7998 190.2 46.6998 190.2 47.6998C190.2 49.3998 189.5 50.7998 188.2 51.8998C186.9 52.9998 185.1 53.7998 182.8 54.3998C180.5 54.9998 177.9 55.1998 174.9 55.1998C170.6 55.1998 166.8 54.3998 163.4 52.7998C160 51.1998 157.3 48.7998 155.4 45.5998C153.5 42.3998 152.5 38.3998 152.5 33.4998C152.5 29.8998 153.1 26.8998 154.2 24.2998C155.3 21.6998 156.9 19.4998 158.8 17.8998C160.7 16.1998 162.9 14.8998 165.3 14.0998C167.7 13.2998 170.2 12.8998 172.8 12.8998C176.6 12.8998 180 13.6998 182.8 15.1998C185.7 16.6998 187.9 18.7998 189.5 21.3998C191.1 23.9998 191.9 26.9998 191.9 30.4998C191.9 32.1998 191.4 33.4998 190.5 34.3998C189.6 35.2998 188.3 35.7998 186.6 36.0998L164.8 39.2998V38.8998ZM164.1 30.6998L180.4 28.0998C180.3 26.4998 179.6 25.0998 178.4 23.7998C177.2 22.4998 175.4 21.7998 173 21.7998C170.5 21.7998 168.4 22.5998 166.8 24.2998C165.2 25.8998 164.3 27.9998 164.1 30.6998ZM123.1 38.9998L144.9 35.7998C146.6 35.5998 147.9 34.9998 148.8 34.0998C149.7 33.1998 150.2 31.8998 150.2 30.1998C150.2 26.7998 149.4 23.6998 147.8 21.0998C146.2 18.4998 144 16.3998 141.1 14.8998C138.2 13.3998 134.9 12.5998 131.1 12.5998C128.5 12.5998 126 12.9998 123.6 13.7998C121.2 14.5998 119 15.8998 117.1 17.5998C115.2 19.2998 113.7 21.3998 112.5 23.9998C111.4 26.5998 110.8 29.6998 110.8 33.1998C110.8 37.9998 111.8 41.9998 113.7 45.2998C115.6 48.4998 118.3 50.8998 121.7 52.4998C125.1 54.0998 129 54.8998 133.2 54.8998C136.1 54.8998 138.8 54.5998 141.1 54.0998C143.4 53.4998 145.2 52.6998 146.5 51.5998C147.8 50.4998 148.5 49.0998 148.5 47.3998C148.5 46.3998 148.2 45.4998 147.7 44.5998C147.2 43.6998 146.5 42.9998 145.7 42.4998C144.4 43.1998 142.8 43.8998 140.7 44.5998C138.6 45.2998 136.5 45.5998 134.1 45.5998C131.2 45.5998 128.7 44.8998 126.6 43.5998C124.9 42.7998 123.7 41.1998 123.1 38.9998ZM122.3 30.7998C122.5 28.0998 123.4 25.8998 124.9 24.3998C126.6 22.6998 128.6 21.8998 131.1 21.8998C133.5 21.8998 135.3 22.5998 136.5 23.8998C137.7 25.1998 138.4 26.6998 138.5 28.1998L122.3 30.7998ZM208.4 43.7998L209.6 44.3998C210.9 44.9998 212.4 45.2998 214.1 45.2998C217.2 45.2998 219.5 44.2998 221.2 42.3998C222.9 40.4998 223.7 37.4998 223.7 33.6998C223.7 30.9998 223.3 28.8998 222.6 27.2998C221.9 25.6998 220.8 24.4998 219.4 23.6998C218 22.8998 216.4 22.4998 214.5 22.4998C213.2 22.4998 212.1 22.6998 211 22.9998C210 23.2998 209.1 23.6998 208.4 24.0998V43.7998ZM210.2 54.2998C210.2 54.2998 209.2 53.9998 208.5 53.5998L208.6 68.7998C208 68.9998 207.3 69.0998 206.3 69.2998C205.3 69.4998 204.2 69.4998 203.1 69.4998C200.8 69.4998 199.1 69.0998 198 68.2998C196.9 67.4998 196.4 65.8998 196.4 63.6998V52.7998V52.5998V52.3998V52.1998V51.9998V51.7998V51.5998V51.3998V50.9998V50.7998V50.5998V50.3998V50.1998V49.9998V49.7998V49.5998V47.9998V22.2998C196.4 20.8998 196.7 19.7998 197.2 18.7998C197.8 17.8998 198.6 17.0998 199.8 16.2998C201.5 15.1998 203.6 14.3998 206.1 13.6998C208.7 12.9998 211.5 12.6998 214.7 12.6998C219 12.6998 222.8 13.3998 226.1 14.8998C229.4 16.3998 232 18.5998 233.8 21.6998C235.6 24.7998 236.5 28.7998 236.5 33.5998C236.5 38.2998 235.6 42.2998 233.8 45.3998C232 48.5998 229.6 50.9998 226.6 52.5998C223.5 54.1998 220.1 55.0998 216.2 55.0998C214.1 55.0998 212.2 54.7998 210.5 54.2998C210.3 54.2998 210.3 54.2998 210.2 54.2998ZM96.3996 33.0998V36.0998V40.8998C96.3996 42.4998 96.8996 43.5998 97.8996 44.2998C98.8996 44.9998 100.3 45.3998 102.1 45.3998C102.9 45.3998 103.8 45.2998 104.8 45.0998C105.8 44.8998 106.6 44.6998 107.3 44.3998C107.7 44.8998 108.1 45.4998 108.5 46.1998C108.9 46.8998 109 47.7998 109 48.6998C109 50.5998 108.2 52.0998 106.7 53.3998C105.1 54.5998 102.5 55.1998 98.8996 55.1998C94.1996 55.1998 90.5996 54.0998 87.9996 51.9998C85.3996 49.8998 84.0996 46.4998 84.0996 41.6998V36.0998V33.0998V32.0998V30.7998V4.09982C84.6996 3.89982 85.3996 3.79982 86.3996 3.59982C87.3996 3.39982 88.4996 3.2998 89.5996 3.2998C91.9996 3.2998 93.6996 3.69982 94.7996 4.49982C95.8996 5.29982 96.3996 6.89982 96.3996 9.09982V15.0998V14.8998H108C108.3 15.2998 108.6 15.9998 108.8 16.7998C109.1 17.5998 109.2 18.4998 109.2 19.4998C109.2 21.1998 108.8 22.3998 108.1 23.1998C107.4 23.9998 106.3 24.3998 105.1 24.3998H96.3996V23.9998V30.7998V32.0998V33.0998Z" fill="white"/>
+        </svg>
+      </div>
+      <div>
+        <div class="title">teepArchieveFlow — Console</div>
+        <div class="subtitle">Painel do Operador • Periférico & transferência de arquivos</div>
+      </div>
 
-        <div class="tabs">
-            <button class="tab active" onclick="switchTab(event, 'peripherals')">🔌 Periféricos</button>
-            <button class="tab" onclick="switchTab(event, 'history')">📊 Histórico</button>
-            <button class="tab" onclick="switchTab(event, 'config')">⚙️ Configurações</button>
+      <div class="top-controls" aria-hidden>
+        <div class="status-badge"><span id="systemLed" class="led online"></span> SYSTEM OK</div>
+        <div class="status-badge" id="connectionStatus">MQ: <strong style="margin-left:8px;color:var(--accent);">connected</strong></div>
+      </div>
+    </header>
+
+    <div class="panel">
+      <nav class="side" aria-label="main navigation">
+        <div class="nav-section">
+          <h3>Navigation</h3>
+          <button class="nav-btn active" onclick="switchTab(event,'peripherals')">Periféricos <span class="kbd">P</span></button>
+          <button class="nav-btn" onclick="switchTab(event,'history')">Histórico <span class="kbd">H</span></button>
+          <button class="nav-btn" onclick="switchTab(event,'config')">Configurações <span class="kbd">C</span></button>
+        </div>
+        <div class="nav-section">
+          <h3>Actions</h3>
+          <button class="nav-btn" onclick="loadPeripherals()">⟳ Atualizar periféricos</button>
+          <button class="nav-btn" onclick="loadOperations()">⟳ Atualizar histórico</button>
+        </div>
+      </nav>
+
+      <main class="content" role="main">
+        <div class="toolbar" role="toolbar">
+          <button class="btn primary" onclick="openPeripheralModal()">➕ Novo Periférico</button>
+          <div style="margin-left:auto" class="status-badge">Service: <strong style="margin-left:8px;color:var(--accent);">running</strong></div>
         </div>
 
-        <div class="content">
-            <!-- 2) Add this new tab content inside the .content block (alongside servers/tasks/history/config) -->
-            <div id="peripherals" class="tab-content active">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2>Periféricos</h2>
-                    <button class="btn btn-primary" onclick="openPeripheralModal()">➕ Novo Periférico</button>
-                </div>
-                <div id="peripherals-list"></div>
-            </div>
+        <!-- Peripherals -->
+        <section id="peripherals" class="tab-pane" aria-labelledby="Periféricos">
+          <h2 style="margin-top:0">Periféricos</h2>
+          <div id="peripherals-list" class="empty-state">Carregando periféricos...</div>
+        </section>
 
-            <!-- Tab: Histórico -->
-            <div id="history" class="tab-content">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2>Histórico de Operações</h2>
-                    <button class="btn btn-secondary" onclick="loadOperations()">🔄 Atualizar</button>
-                </div>
-                <div id="history-list"></div>
-            </div>
+        <!-- History -->
+        <section id="history" class="tab-pane" style="display:none">
+          <h2 style="margin-top:0">Histórico de Operações</h2>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <button class="btn" onclick="loadOperations()">🔄 Atualizar</button>
+          </div>
+          <div id="history-list" class="empty-state">Carregando histórico...</div>
+        </section>
 
-            <!-- Tab: Configurações -->
-            <div id="config" class="tab-content">
-                <h2 style="margin-bottom: 20px;">Configurações do Sistema</h2>
-                <div id="config-form"></div>
-            </div>
-        </div>
+        <!-- Config -->
+        <section id="config" class="tab-pane" style="display:none">
+          <h2 style="margin-top:0">Configurações do Sistema</h2>
+          <div id="config-form" class="empty-state">Carregando configurações...</div>
+        </section>
+      </main>
     </div>
+  </div>
 
-    <!-- 3) Add this modal markup near other modals (serverModal, taskModal) -->
-    <div id="peripheralModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 id="peripheralModalTitle">Novo Periférico</h2>
-            </div>
-            <form id="peripheralForm" onsubmit="savePeripheral(event)">
-                <input type="hidden" id="peripheralId">
-
-                <div class="form-group">
-                    <label>Nome *</label>
-                    <input type="text" id="peripheralName" required placeholder="Ex: Sensor A">
-                </div>
-
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>Interface</label>
-                        <select id="peripheralInterface">
-                            <option value="">-- Selecionar --</option>
-                            <option value="TCPIP">TCP/IP Serial</option>
-                            <option value="FTP">FTP</option>
-                            <option value="SCP">SCP</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Dispositivo</label>
-                        <select id="peripheralDevice">
-                            <option value="">-- Selecionar --</option>
-                            <option value="CNC">CNC</option>
-                            <option value="GENERIC">Genérico</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>Modelo</label>
-                        <select id="peripheralModel">
-                            <option value="">-- Selecionar --</option>
-                            <option value="SIEMENS">Siemens</option>
-                            <option value="FANUC">Fanuc</option>
-                            <option value="MITSUBISHI">Mitsubishi</option>
-                            <option value="GENERIC">Genérico</option>
-                        </select>
-                    </div>
-               </div>
-
-                <div class="form-group">
-                    <label>Parâmetros de Conexão (JSON)</label>
-                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-                        <button type="button" class="btn btn-secondary" onclick="insertDefaultConnectionParams()">
-                            Inserir JSON padrão
-                        </button>
-                        <small style="color:#666;">Ex: host, port, timeout, model</small>
-                    </div>
-                    <textarea id="peripheralJsonConnectionParams" rows="4" placeholder='{"host": "192.168.0.7", "port": 8234, "timeout": 3, "model": "dnc"}'></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label>Canais de Index Virtuais (JSON)</label>
-                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-                        <button type="button" class="btn btn-secondary" onclick="openAddIndexModal()">
-                            Adicionar novo Index
-                        </button>
-                        <small style="color:#666;">Ex: {"DIGITAL_INPUT_1": {"index": "1", "notification_type": 3, "interval": 1000}, "DIGITAL_INPUT_1": ...</small>
-                    </div>
-                    <textarea id="peripheralJsonChannelToVirtualIndex" rows="4" placeholder='{"DIGITAL_INPUT_1": {"index": "1", "notification_type": 3, "interval": 1000}'></textarea>
-                </div>
-
-                <div id="addIndexModal" class="modal">
-                    <div class="modal-content" style="max-width:420px;">
-                        <div class="modal-header">
-                            <h2>Adicionar Novo Index</h2>
-                        </div>
-                        <div>
-                            <div class="form-group">
-                                <label>Tipo*</label>
-                                <select id="newIndexType">
-                                    <option value="DIGITAL_INPUT">Entrada</option>
-                                    <option value="DIGITAL_OUTPUT">Saída</option>
-                                    <option value="PRINT">Impressora</option>
-                                    <option value="READER">Leitor</option>
-                                    <option value="DNC">DNC</option>
-                                    <option value="GENERIC_FILE_TRANSFER">Carregar arquivo Genérico</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Canal</label>
-                                <input id="newIndexChannel" type="text" />
-                            </div>
-                            <div class="form-group">
-                                <label>Index Virtual*</label>
-                                <input id="newIndexVirtual" type="number" min="0"/>
-                            </div>
-                            <div class="form-group">
-                                <label>Tipos de Notificação*</label>
-                                <select id="newNotificationType">
-                                    <option value="0">Troca de Estado</option>
-                                    <option value="1">Subida</option>
-                                    <option value="2">Descida</option>
-                                    <option value="3">Contador</option>
-                                    <option value="4">Novo Dado</option>
-                                </select>
-                            </div>
-                            <div style="display:flex; gap:10px; margin-top:10px;">
-                                <button type="button" onclick="addIndex(event)" class="btn btn-success">Adicionar</button>
-                                <button type="button" class="btn btn-secondary" onclick="closeAddIndexModal()">Cancelar</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 10px; margin-top: 20px;">
-                    <button type="submit" class="btn btn-success">💾 Salvar</button>
-                    <button type="button" class="btn btn-secondary" onclick="closePeripheralModal()">✖️ Cancelar</button>
-                </div>
-            </form>
+  <!-- Peripheral Modal (keeps same IDs/fields as before) -->
+  <div id="peripheralModal" class="modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <h2 id="peripheralModalTitle">Novo Periférico</h2>
+      <form id="peripheralForm" onsubmit="savePeripheral(event)" novalidate>
+        <input type="hidden" id="peripheralId" />
+        <div class="form-group">
+          <label>Nome *</label>
+          <input type="text" id="peripheralName" required placeholder="Ex: Sensor A">
         </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Interface</label>
+            <select id="peripheralInterface">
+              <option value="">-- Selecionar --</option>
+              <option value="TCPIP">TCP/IP Serial</option>
+              <option value="FTP">FTP</option>
+              <option value="SCP">SCP</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Dispositivo</label>
+            <select id="peripheralDevice">
+              <option value="">-- Selecionar --</option>
+              <option value="CNC">CNC</option>
+              <option value="GENERIC">Genérico</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Modelo</label>
+          <select id="peripheralModel">
+            <option value="">-- Selecionar --</option>
+            <option value="SINUMERIK840Dsl">Siemens - SINUMERIK 840D sl</option>
+            <option value="FANUC">Fanuc</option>
+            <option value="MITSUBISHI">Mitsubishi</option>
+            <option value="GENERIC">Genérico</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Parâmetros de Conexão (JSON)</label>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <button type="button" class="btn" onclick="insertDefaultConnectionParams()">Inserir JSON padrão</button>
+            <small style="color:var(--muted)">Ex: host, port, timeout, model</small>
+          </div>
+          <textarea id="peripheralJsonConnectionParams" rows="4" placeholder='{"host":"192.168.0.7","port":8234,"timeout":3}'></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Canais de Index Virtuais (JSON)</label>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <button type="button" class="btn" onclick="openAddIndexModal()">Adicionar novo Index</button>
+            <small style="color:var(--muted)">Ex: {"DIGITAL_INPUT_1": {"index":"1", "notification_type":3}}</small>
+          </div>
+          <textarea id="peripheralJsonChannelToVirtualIndex" rows="4" placeholder='{"DIGITAL_INPUT_1":{"index":"1","notification_type":3}}'></textarea>
+        </div>
+
+        <div id="addIndexModal" class="modal" aria-hidden="true">
+          <div class="modal-card" style="max-width:420px">
+            <h2>Adicionar Novo Index</h2>
+            <div class="form-group">
+              <label>Tipo*</label>
+              <select id="newIndexType">
+                <option value="DIGITAL_INPUT">Entrada</option>
+                <option value="DIGITAL_OUTPUT">Saída</option>
+                <option value="PRINT">Impressora</option>
+                <option value="READER">Leitor</option>
+                <option value="DNC">DNC</option>
+                <option value="GENERIC_FILE_TRANSFER">Carregar arquivo</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Canal</label>
+              <input id="newIndexChannel" type="text" />
+            </div>
+            <div class="form-group">
+              <label>Index Virtual*</label>
+              <input id="newIndexVirtual" type="number" min="0" />
+            </div>
+            <div class="form-group">
+              <label>Tipos de Notificação*</label>
+              <select id="newNotificationType">
+                <option value="0">Troca de Estado</option>
+                <option value="1">Subida</option>
+                <option value="2">Descida</option>
+                <option value="3">Contador</option>
+                <option value="4">Novo Dado</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:10px;justify-content:flex-end">
+              <button type="button" class="btn" onclick="addIndex()">Adicionar</button>
+              <button type="button" class="btn" onclick="closeAddIndexModal()">Cancelar</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+          <button type="submit" class="btn primary">💾 Salvar</button>
+          <button type="button" class="btn" onclick="closePeripheralModal()">✖ Cancelar</button>
+        </div>
+      </form>
     </div>
-
-    <script>
-        // Estado global
-        let servers = [];
-        let tasks = [];
-        let operations = [];
-
-        // Inicialização
-        document.addEventListener('DOMContentLoaded', () => {
-            try { loadOperations(); } catch (e) { console.error('loadOperations failed', e); }
-            try { loadConfig(); } catch (e) { console.error('loadConfig failed', e); }
-            try { loadPeripherals() } catch (e) { console.error('loadPeripherals failed', e); }
-        });
-
-        function openAddIndexModal() {
-            const modal = document.getElementById('addIndexModal');
-            if (!modal) return;
-            document.getElementById('newIndexVirtual').value = '';
-            document.getElementById('newIndexType').value = '0';
-            document.getElementById('newNotificationType').value = '0';
-            modal.classList.add('active');
-        }
-
-        function closeAddIndexModal() {
-            const modal = document.getElementById('addIndexModal');
-            if (!modal) return;
-            modal.classList.remove('active');
-        }
-
-        function addIndex(event) {
-            event.preventDefault();
-
-            const chEl = document.getElementById('newIndexChannel');
-            const typeEl = document.getElementById('newIndexType');
-            const vEl = document.getElementById('newIndexVirtual');
-            const notificationTypeEl = document.getElementById('newNotificationType');
-            const ta = document.getElementById('peripheralJsonChannelToVirtualIndex');
-
-            if (!chEl || !typeEl || !vEl || !notificationTypeEl || !ta) return;
-
-            const channelRaw = chEl.value.trim();
-            const type = (typeEl.value || 'DIGITAL_INPUT').trim();
-            const virtualIndexRaw = vEl.value;
-            const notificationType = parseInt(notificationTypeEl.value, 10) || 0;
-
-            if (virtualIndexRaw === '') {
-                alert('Preencha o index virtual.');
-                return;
-            }
-
-            const channel = channelRaw;
-            const virtual_index = String(virtualIndexRaw);
-            const interval = 1000;
-            const defaultPath = '';
-
-            let key = type;
-            if (channel !== '') key += `_${channel}`;
-
-            // parse existing textarea content into an object map
-            let obj = {};
-            const raw = ta.value.trim();
-            if (raw) {
-                try {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) {
-                        // convert array form to object map when possible
-                        parsed.forEach(item => {
-                            if (!item) return;
-                            const ch = item.channel ?? item.ch ?? item.channel_id;
-                            const itype = item.type ?? type;
-                            const idx = item.virtual_index ?? item.index ?? item.v;
-                            if (ch !== undefined) {
-                                const k = `${itype}_${ch}`;
-                                obj[k] = {
-                                    index: parseInt(idx ?? 0),
-                                    notification_type: parseInt(item.notification_type ?? 0, 10) || 0,
-                                    interval: item.interval ?? interval,
-                                    path: item.path ?? undefined
-                                };
-                                // remove undefined properties for cleanliness
-                                if (obj[k].path === undefined) delete obj[k].path;
-                            }
-                        });
-                    } else if (parsed && typeof parsed === 'object') {
-                        obj = parsed;
-                    }
-                } catch (e) {
-                    // invalid JSON: start fresh object
-                    obj = {};
-                }
-            }
-
-            // build new entry: index and notification_type always present
-            const entry = {
-                index: virtual_index,
-                notification_type: notificationType
-            };
-
-            // add fields based on type
-            if (type === 'DIGITAL_INPUT') {
-                entry.interval = interval;
-            } else if (type === 'DNC') {
-                entry.send_interval = 0.1;
-                entry.end_program = 'END_PROGRAM';
-                entry.dir_to_save_dnc_program = 'machine_code/';
-                entry.api_save_file = "http://127.0.0.1:8000/production/api/save_new_file/";
-                entry.extension = "NC";
-            } else if (type === 'GENERIC_FILE_TRANSFER') {
-                entry.local_path = '/home/';
-            }
-
-            // insert/replace key
-            obj[key] = entry;
-
-            ta.value = JSON.stringify(obj, null, 2);
-            closeAddIndexModal();
-        }
-
-        function insertDefaultConnectionParams() {
-            const ta = document.getElementById('peripheralJsonConnectionParams');
-            const ifaceEl = document.getElementById('peripheralInterface');
-            if (!ta || !ifaceEl) return;
-
-            const existing = ta.value.trim();
-            if (existing && !confirm('O campo já contém texto. Deseja substituir pelo JSON padrão para a interface selecionada?')) return;
-
-            const val = (ifaceEl.value || '').toUpperCase();
-            const text = (ifaceEl.options[ifaceEl.selectedIndex]?.text || '').toUpperCase();
-            const key = `${val} ${text}`;
-
-            let defaults;
-
-            if (/SFTP/.test(key)) {
-                defaults = {
-                    host: "192.168.0.7",
-                    port: 22,
-                    user: "user",
-                    password: "pass",
-                    private_key_path: "",
-                    timeout: 30,
-                    protocol: "sftp",
-                    local_path: "/home/"
-                };
-            } else if (/SCP/.test(key)) {
-                defaults = {
-                    host: "192.168.0.7",
-                    port: 22,
-                    user: "user",
-                    password: "pass",
-                    timeout: 30,
-                    protocol: "scp",
-                    local_path: "/home/"
-                };
-            } else if (/FTP/.test(key) && !/SFTP/.test(key)) {
-                defaults = {
-                    host: "192.168.0.7",
-                    port: 21,
-                    user: "anonymous",
-                    password: "",
-                    passive: true,
-                    timeout: 30,
-                    protocol: "ftp",
-                    local_path: "/home/"
-                };
-            } else if (/TCP|SERIAL|RS232|RS485/.test(key) || /TCP\/IP/.test(key)) {
-                defaults = {
-                    host: "192.168.0.7",
-                    port: 8234,
-                    timeout: 3,
-                    baudrate: 115200,
-                    parity: "none",
-                    stopbits: 1,
-                    protocol: "tcp"
-                };
-            } else if (/DNC/.test(key)) {
-                defaults = {
-                    host: "192.168.0.7",
-                    port: 8234,
-                    timeout: 3,
-                    model: "dnc"
-                };
-            } else {
-                // generic fallback
-                defaults = {
-                    host: "192.168.0.7",
-                    port: 8234,
-                    timeout: 3,
-                    model: "generic"
-                };
-            }
-
-            try {
-                ta.value = JSON.stringify(defaults, null, 2);
-            } catch (e) {
-                ta.value = '{"host":"192.168.0.7","port":8234,"timeout":3}';
-            }
-        }
-
-        // Funções de navegação
-        function switchTab(event, tabName) {
-            if (!event) event = window.event || {};
-            const target = event.currentTarget || event.target || document.querySelector(`.tab[onclick*="${tabName}"]`);
-
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-
-            if (target && target.classList) target.classList.add('active');
-            const tabEl = document.getElementById(tabName);
-            if (tabEl) tabEl.classList.add('active');
-
-            if (tabName === 'history') loadOperations();
-        }
-
-        // API: Histórico
-        async function loadOperations() {
-            const list = document.getElementById('history-list');
-            list.innerHTML = '<div class="loading">Carregando histórico...</div>';
-
-            try {
-                const response = await fetch('/api/operations?limit=100');
-                operations = await response.json();
-
-                if (operations.length === 0) {
-                    list.innerHTML = `
-                        <div class="empty-state">
-                            <p>📊 Nenhuma operação registrada</p>
-                        </div>
-                    `;
-                    return;
-                }
-
-                list.innerHTML = `
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Data/Hora</th>
-                                <th>Operação</th>
-                                <th>Status</th>
-                                <th>Detalhes</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${operations.map(op => `
-                                <tr>
-                                    <td>${formatDate(op.created_at)}</td>
-                                    <td><strong>${op.operation_type}</strong></td>
-                                    <td>
-                                        <span class="status-badge ${op.status === 'success' ? 'status-success' : 'status-error'}">
-                                            ${op.status === 'success' ? '✓ Sucesso' : '✗ Erro'}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <button class="btn btn-secondary" onclick="showDetails(${op.id})">👁️ Ver</button>
-                                    </td>
-                                    <td>
-                                        <button class="btn btn-danger" onclick="deleteOperation(${op.id})">🗑️</button>
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } catch (error) {
-                list.innerHTML = '<div class="alert alert-error">Erro ao carregar histórico</div>';
-                console.error(error);
-            }
-        }
-
-        async function deleteOperation(id) {
-            if (!confirm('Deseja realmente deletar esta operação do histórico?')) return;
-
-            try {
-                const response = await fetch(`/api/operations/${id}`, {
-                    method: 'DELETE'
-                });
-
-                if (response.ok) {
-                    loadOperations();
-                    showAlert('success', 'Operação deletada do histórico');
-                }
-            } catch (error) {
-                showAlert('error', 'Erro ao deletar operação');
-                console.error(error);
-            }
-        }
-
-        function showDetails(id) {
-            const op = operations.find(o => o.id === id);
-            if (!op) return;
-
-            let details = op.details;
-            try {
-                const parsed = JSON.parse(details);
-                details = JSON.stringify(parsed, null, 2);
-            } catch (e) {}
-
-            alert(`Detalhes da Operação:\n\n${details}`);
-        }
-
-        // API: Configurações
-        async function loadConfig() {
-            const form = document.getElementById('config-form');
-            form.innerHTML = '<div class="loading">Carregando configurações...</div>';
-
-            try {
-                const response = await fetch('/api/config');
-                const config = await response.json();
-
-                form.innerHTML = `
-                    <form onsubmit="saveConfig(event)">
-                        <h3 style="margin-bottom: 15px;">🐰 RabbitMQ</h3>
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Host</label>
-                                <input type="text" id="rabbitmqHost" value="${config.rabbitmq.host || 'localhost'}">
-                            </div>
-                            <div class="form-group">
-                                <label>Porta</label>
-                                <input type="number" id="rabbitmqPort" value="${config.rabbitmq.port || 5672}">
-                            </div>
-                        </div>
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Usuário</label>
-                                <input type="text" id="rabbitmqUser" value="${config.rabbitmq.user || 'guest'}">
-                            </div>
-                            <div class="form-group">
-                                <label>Senha</label>
-                                <input type="password" id="rabbitmqPassword" value="${config.rabbitmq.password || 'guest'}">
-                            </div>
-                        </div>
-
-                        <hr style="margin: 30px 0; border: none; border-top: 2px solid #eee;">
-
-                        <div style="margin-top: 30px;">
-                            <button type="submit" class="btn btn-success">💾 Salvar Configurações</button>
-                        </div>
-                    </form>
-                `;
-            } catch (error) {
-                form.innerHTML = '<div class="alert alert-error">Erro ao carregar configurações</div>';
-                console.error(error);
-            }
-        }
-
-        async function saveConfig(event) {
-            event.preventDefault();
-
-            const data = {
-                rabbitmq: {
-                    host: document.getElementById('rabbitmqHost').value,
-                    port: parseInt(document.getElementById('rabbitmqPort').value),
-                    user: document.getElementById('rabbitmqUser').value,
-                    password: document.getElementById('rabbitmqPassword').value,
-                }
-            };
-
-            try {
-                const response = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data)
-                });
-
-                if (response.ok) {
-                    showAlert('success', 'Configurações salvas! Reinicie o serviço para aplicar as mudanças.');
-                }
-            } catch (error) {
-                showAlert('error', 'Erro ao salvar configurações');
-                console.error(error);
-            }
-        }
-
-        function formatDate(dateString) {
-            if (!dateString) return 'N/A';
-            const date = new Date(dateString);
-            return date.toLocaleString('pt-BR');
-        }
-
-        function showAlert(type, message) {
-            const alertDiv = document.createElement('div');
-            alertDiv.className = `alert alert-${type}`;
-            alertDiv.textContent = message;
-            alertDiv.style.position = 'fixed';
-            alertDiv.style.top = '20px';
-            alertDiv.style.right = '20px';
-            alertDiv.style.zIndex = '9999';
-            alertDiv.style.minWidth = '300px';
-            alertDiv.style.animation = 'slideIn 0.3s';
-
-            document.body.appendChild(alertDiv);
-
-            setTimeout(() => {
-                alertDiv.style.animation = 'fadeOut 0.3s';
-                setTimeout(() => alertDiv.remove(), 300);
-            }, 3000);
-        }
-
-        // Fechar modais ao clicar fora
-        window.onclick = function(event) {
-            if (event.target.classList.contains('modal')) {
-                event.target.classList.remove('active');
-            }
-        }
-
-        // Peripherals API
-    async function loadPeripherals() {
-        const list = document.getElementById('peripherals-list');
-        list.innerHTML = '<div class="loading">Carregando periféricos...</div>';
-
-        try {
-            const res = await fetch('/api/peripherals');
-            const peripherals = await res.json();
-
-            if (!peripherals || peripherals.length === 0) {
-                list.innerHTML = `
-                    <div class="empty-state">
-                        <p>🔌 Nenhum periférico cadastrado</p>
-                        <button class="btn btn-primary" onclick="openPeripheralModal()">Adicionar Periférico</button>
-                    </div>
-                `;
-                return;
-            }
-
-            list.innerHTML = `
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Nome</th>
-                            <th>Interface</th>
-                            <th>Dispositivo</th>
-                            <th>Modelo</th>
-                            <th>Última Atualização</th>
-                            <th>Criado em</th>
-                            <th>Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${peripherals.map(p => `
-                            <tr>
-                                <td>${escapeHtml(p.name || '')}</td>
-                                <td>${escapeHtml(p.interface || '')}</td>
-                                <td>${escapeHtml(p.device || '')}</td>
-                                <td>${escapeHtml(p.model || '')}</td>
-                                <td>${formatDate(p.last_update)}</td>
-                                <td>${formatDate(p.created_at)}</td>
-                                <td class="actions">
-                                    <button class="btn btn-secondary" onclick="editPeripheral(${p.id})">✏️</button>
-                                    <button class="btn btn-danger" onclick="deletePeripheral(${p.id}, '${escapeJs(p.name || '')}')">🗑️</button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
-        } catch (err) {
-            list.innerHTML = '<div class="alert alert-error">Erro ao carregar periféricos</div>';
-            console.error(err);
-        }
-    }
-
-    function openPeripheralModal(id = null) {
-        const modal = document.getElementById('peripheralModal');
-        const title = document.getElementById('peripheralModalTitle');
-
-        // get elements and guard against missing nodes
-        const ifaceEl = document.getElementById('peripheralInterface');
-        const deviceEl = document.getElementById('peripheralDevice');
-        const modelEl = document.getElementById('peripheralModel');
-        const idEl = document.getElementById('peripheralId');
-        const nameEl = document.getElementById('peripheralName');
-        const connEl = document.getElementById('peripheralJsonConnectionParams');
-        const chanEl = document.getElementById('peripheralJsonChannelToVirtualIndex');
-
-        if (id) {
-          title.textContent = 'Editar Periférico';
-          fetch(`/api/peripherals/${id}`).then(r => {
-            if (!r.ok) throw r;
-            return r.json();
-          }).then(p => {
-              console.log('Carregando periférico para edição:', p);
-            if (idEl) idEl.value = p.id ?? '';
-            if (nameEl) nameEl.value = p.name ?? '';
-            if (ifaceEl) ifaceEl.value = p.interface ?? '';
-            if (deviceEl) deviceEl.value = p.device ?? '';
-            if (modelEl) modelEl.value = p.model ?? '';
-            if (connEl) connEl.value = prettyJson(p.json_connection_params);
-            if (chanEl) chanEl.value = prettyJson(p.json_channel_to_virtual_index);
-            modal.classList.add('active');
-          }).catch(e => {
-            showAlert('error', 'Erro ao carregar periférico');
-            console.error(e);
-          });
-        } else {
-          title.textContent = 'Novo Periférico';
-          const form = document.getElementById('peripheralForm');
-          if (form) form.reset();
-          if (idEl) idEl.value = '';
-          if (ifaceEl) ifaceEl.value = '';
-          modal.classList.add('active');
-        }
-      }
-
-    function closePeripheralModal() {
-        document.getElementById('peripheralModal').classList.remove('active');
-    }
-
-    async function savePeripheral(event) {
-        event.preventDefault();
-        console.log('Salvando periférico...');
-        const id = document.getElementById('peripheralId').value;
-        const data = {
-            name: document.getElementById('peripheralName').value,
-            interface: (document.getElementById('peripheralInterface').value || null),
-            device: document.getElementById('peripheralDevice').value || null,
-            model: document.getElementById('peripheralModel').value || null,
-            json_connection_params: parseJsonField('peripheralJsonConnectionParams'),
-            json_channel_to_virtual_index: parseJsonField('peripheralJsonChannelToVirtualIndex')
-        };
-
-        try {
-            const url = id ? `/api/peripherals/${id}` : '/api/peripherals';
-            const method = id ? 'PUT' : 'POST';
-            const res = await fetch(url, {
-                method,
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-
-            if (res.ok) {
-                closePeripheralModal();
-                loadPeripherals();
-                showAlert('success', id ? 'Periférico atualizado' : 'Periférico criado');
-            } else {
-                const err = await res.json().catch(() => ({}));
-                showAlert('error', err.error || 'Erro ao salvar periférico');
-            }
-        } catch (e) {
-            showAlert('error', 'Erro ao salvar periférico');
-            console.error(e);
-        }
-    }
-
-    function editPeripheral(id) {
-        openPeripheralModal(id);
-    }
-
-    async function deletePeripheral(id, name) {
-        if (!confirm(`Deseja realmente deletar o periférico "${name}"?`)) return;
-        try {
-            const res = await fetch(`/api/peripherals/${id}`, { method: 'DELETE' });
-            if (res.ok) {
-                loadPeripherals();
-                showAlert('success', 'Periférico deletado');
-            } else {
-                showAlert('error', 'Erro ao deletar periférico');
-            }
-        } catch (e) {
-            showAlert('error', 'Erro ao deletar periférico');
-            console.error(e);
-        }
-    }
-
-    // Helpers
-    function parseJsonField(elementId) {
-        const v = document.getElementById(elementId).value.trim();
-        if (!v) return null;
-        try {
-            return JSON.parse(v);
-        } catch (e) {
-            // if invalid JSON, return raw string so backend can store it
-            return v;
-        }
-    }
-
-    function prettyJson(v) {
-        if (!v && v !== 0) return '';
-        try {
-            return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v, null, 2);
-        } catch (e) {
-            return typeof v === 'string' ? v : JSON.stringify(v);
-        }
-    }
-
-    // small escaping helpers for safe inline HTML/JS in table rows
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/[&<>"']/g, function (m) {
-            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
-        });
-    }
-
-    function escapeJs(str) {
-        if (!str) return '';
-        return String(str).replace(/['"\\]/g, '\\$&').replace(/\n/g, '\\n');
-    }
-    </script>
+  </div>
+
+<script>
+/* Minimal JS that preserves original hooks and IDs.
+   Functions call the same endpoints used previously. */
+
+function switchTab(e, name){
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  const btn = Array.from(document.querySelectorAll('.nav-btn')).find(b => b.onclick && b.onclick.toString().includes("'" + name + "'"));
+  if(btn) btn.classList.add('active');
+  document.querySelectorAll('.tab-pane').forEach(p => p.style.display = 'none');
+  const el = document.getElementById(name);
+  if(el) el.style.display = 'block';
+  if(name === 'peripherals') loadPeripherals();
+  if(name === 'history') loadOperations();
+  if(name === 'config') loadConfig();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // initial load
+  loadPeripherals();
+  loadOperations();
+  loadConfig();
+});
+
+async function loadPeripherals(){
+  const list = document.getElementById('peripherals-list');
+  list.innerHTML = '<div class="empty-state">Carregando periféricos...</div>';
+  try {
+    const res = await fetch('/api/peripherals');
+    const data = await res.json();
+    if(!data || data.length === 0){ list.innerHTML = '<div class="empty-state">Nenhum periférico encontrado</div>'; return; }
+    const rows = data.map(p => `<tr>
+      <td>${escapeHtml(p.name||'')}</td>
+      <td>${escapeHtml(p.interface||'')}</td>
+      <td>${escapeHtml(p.device||'')}</td>
+      <td>${escapeHtml(p.model||'')}</td>
+      <td style="text-align:right">
+        <div class="actions">
+          <button class="btn" onclick="openPeripheralModal(${p.id})">Editar</button>
+          <button class="btn" onclick="deletePeripheral(${p.id}, '${escapeJs(p.name||'')}')">Deletar</button>
+        </div>
+      </td>
+    </tr>`).join('');
+    list.innerHTML = `<table><thead><tr><th>Nome</th><th>Interface</th><th>Dispositivo</th><th>Modelo</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch(e){ list.innerHTML = '<div class="empty-state">Erro ao carregar periféricos</div>'; console.error(e); }
+}
+
+async function loadOperations(){
+  const el = document.getElementById('history-list');
+  el.innerHTML = '<div class="empty-state">Carregando histórico...</div>';
+  try {
+    const res = await fetch('/api/operations?limit=100');
+    const ops = await res.json();
+    if(!ops || ops.length === 0){ el.innerHTML = '<div class="empty-state">Nenhuma operação</div>'; return; }
+    const rows = ops.map(op => `<tr>
+      <td>${formatDate(op.ts)}</td>
+      <td>${escapeHtml(op.action||'')}</td>
+      <td>${op.success?'<span class="status-badge">OK</span>':'<span class="status-badge" style="background:rgba(255,80,80,0.12);color:#ff8a8a">ERR</span>'}</td>
+      <td>${escapeHtml(op.details?String(op.details):'')}</td>
+      <td style="text-align:right">
+        <div class="actions">
+          <button class="btn" onclick="showDetails(${op.id})">Ver</button>
+          <button class="btn" onclick="deleteOperation(${op.id})">Deletar</button>
+        </div>
+      </td>
+    </tr>`).join('');
+    el.innerHTML = `<table><thead><tr><th>Data/Hora</th><th>Operação</th><th>Status</th><th>Detalhes</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch(e){ el.innerHTML = '<div class="empty-state">Erro ao carregar histórico</div>'; console.error(e); }
+}
+
+async function loadConfig(){
+  const el = document.getElementById('config-form');
+  el.innerHTML = '<div class="empty-state">Carregando configurações...</div>';
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+    el.innerHTML = `<form onsubmit="saveConfig(event)">
+      <div class="form-row">
+        <div class="form-group">
+          <label>RabbitMQ Host</label>
+          <input id="rabbitmqHost" type="text" value="${escapeHtml(cfg.rabbitmq?.host||'localhost')}" />
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input id="rabbitmqPort" type="number" value="${cfg.rabbitmq?.port||5672}" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>User</label>
+          <input id="rabbitmqUser" type="text" value="${escapeHtml(cfg.rabbitmq?.user||'guest')}" />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input id="rabbitmqPassword" type="text" value="${escapeHtml(cfg.rabbitmq?.password||'')}" />
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" type="submit">Salvar</button></div>
+    </form>`;
+  } catch(e){ el.innerHTML = '<div class="empty-state">Erro ao carregar configurações</div>'; console.error(e); }
+}
+
+async function saveConfig(e){
+  e.preventDefault();
+  try{
+    const data = { rabbitmq: {
+      host: document.getElementById('rabbitmqHost').value,
+      port: Number(document.getElementById('rabbitmqPort').value||5672),
+      user: document.getElementById('rabbitmqUser').value,
+      password: document.getElementById('rabbitmqPassword').value
+    }};
+    const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    if(res.ok) showAlert('success','Configurações salvas. Reinicie o serviço.'); else showAlert('error','Erro ao salvar');
+  } catch(e){ console.error(e); showAlert('error','Erro ao salvar'); }
+}
+
+function openPeripheralModal(id){
+  const modal = document.getElementById('peripheralModal');
+  const title = document.getElementById('peripheralModalTitle');
+  const form = document.getElementById('peripheralForm');
+  form.reset();
+  if(id){
+    title.textContent = 'Editar Periférico';
+    fetch(`/api/peripherals/${id}`).then(r=>r.json()).then(p=>{
+      document.getElementById('peripheralId').value = p.id||'';
+      document.getElementById('peripheralName').value = p.name||'';
+      document.getElementById('peripheralInterface').value = p.interface||'';
+      document.getElementById('peripheralDevice').value = p.device||'';
+      document.getElementById('peripheralModel').value = p.model||'';
+      document.getElementById('peripheralJsonConnectionParams').value = prettyJson(p.json_connection_params);
+      document.getElementById('peripheralJsonChannelToVirtualIndex').value = prettyJson(p.json_channel_to_virtual_index);
+      modal.classList.add('active');
+    }).catch(e=>{ showAlert('error','Erro ao carregar periférico'); console.error(e); });
+  } else {
+    title.textContent = 'Novo Periférico';
+    modal.classList.add('active');
+  }
+}
+
+function closePeripheralModal(){ document.getElementById('peripheralModal').classList.remove('active'); }
+
+function openAddIndexModal(){ document.getElementById('addIndexModal').classList.add('active'); }
+function closeAddIndexModal(){ document.getElementById('addIndexModal').classList.remove('active'); }
+
+function insertDefaultConnectionParams(){
+  const el = document.getElementById('peripheralJsonConnectionParams');
+  el.value = JSON.stringify({host:"192.168.0.7",port:8234,timeout:3,model:"dnc"},null,2);
+}
+
+function addIndex(){
+  try{
+    const field = document.getElementById('peripheralJsonChannelToVirtualIndex');
+    const obj = field.value ? JSON.parse(field.value) : {};
+    const key = document.getElementById('newIndexType').value + (document.getElementById('newIndexChannel').value ? '_' + document.getElementById('newIndexChannel').value : '');
+    obj[key] = { index: String(document.getElementById('newIndexVirtual').value||0), notification_type: Number(document.getElementById('newNotificationType').value||0) };
+    field.value = JSON.stringify(obj,null,2);
+    closeAddIndexModal();
+    showAlert('success','Index adicionado');
+  } catch(e){ showAlert('error','JSON inválido'); }
+}
+
+async function savePeripheral(e){
+  e.preventDefault();
+  const id = document.getElementById('peripheralId').value;
+  const payload = {
+    name: document.getElementById('peripheralName').value,
+    interface: document.getElementById('peripheralInterface').value || null,
+    device: document.getElementById('peripheralDevice').value || null,
+    model: document.getElementById('peripheralModel').value || null,
+    json_connection_params: parseJsonField('peripheralJsonConnectionParams'),
+    json_channel_to_virtual_index: parseJsonField('peripheralJsonChannelToVirtualIndex')
+  };
+  try{
+    const url = id ? `/api/peripherals/${id}` : '/api/peripherals';
+    const method = id ? 'PUT' : 'POST';
+    const res = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(res.ok){ closePeripheralModal(); loadPeripherals(); showAlert('success', id ? 'Periférico atualizado' : 'Periférico criado'); }
+    else { const err = await res.json().catch(()=>({})); showAlert('error', err.error || 'Erro ao salvar periférico'); }
+  } catch(e){ console.error(e); showAlert('error','Erro ao salvar periférico'); }
+}
+
+async function deletePeripheral(id,name){
+  if(!confirm(`Deseja realmente deletar o periférico "${name}"?`)) return;
+  try{
+    const res = await fetch(`/api/peripherals/${id}`,{method:'DELETE'});
+    if(res.ok){ loadPeripherals(); showAlert('success','Periférico deletado'); } else showAlert('error','Erro ao deletar periférico');
+  } catch(e){ console.error(e); showAlert('error','Erro ao deletar periférico'); }
+}
+
+async function deleteOperation(id){
+  if(!confirm('Deletar operação do histórico?')) return;
+  try{
+    const res = await fetch(`/api/operations/${id}`,{method:'DELETE'});
+    if(res.ok){ loadOperations(); showAlert('success','Operação deletada'); }
+  } catch(e){ console.error(e); showAlert('error','Erro ao deletar operação'); }
+}
+
+function showDetails(id){
+  fetch(`/api/operations/${id}`).then(r=>r.json()).then(op=>{
+    let details = op.details || JSON.stringify(op, null, 2);
+    try{ details = JSON.stringify(JSON.parse(op.details), null, 2); }catch(e){}
+    alert(`Detalhes:\n\n${details}`);
+  }).catch(e=>{ showAlert('error','Erro ao carregar detalhes'); console.error(e); });
+}
+
+/* Helpers */
+function parseJsonField(id){ const v=document.getElementById(id).value.trim(); if(!v) return null; try{ return JSON.parse(v);}catch(e){ return v; } }
+function prettyJson(v){ if(v===undefined||v===null) return ''; try{ return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v, null, 2); }catch(e){ return typeof v === 'string' ? v : JSON.stringify(v); } }
+function escapeHtml(s){ if(s===undefined||s===null) return ''; return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]); }
+function escapeJs(s){ if(s===undefined||s===null) return ''; return String(s).replace(/['"\\]/g,'\\\\$&').replace(/\n/g,'\\n'); }
+function formatDate(d){ if(!d) return 'N/A'; try{ return new Date(d*1000).toLocaleString('pt-BR'); }catch(e){ return String(d); } }
+
+function showAlert(type,msg){
+  const el = document.createElement('div');
+  el.textContent = msg;
+  el.style.position = 'fixed'; el.style.right = '18px'; el.style.top = '18px';
+  el.style.padding = '12px 16px'; el.style.borderRadius = '8px'; el.style.zIndex = '9999'; el.style.fontWeight = '700';
+  el.style.background = type==='success' ? 'linear-gradient(90deg, rgba(72,187,120,0.12), rgba(72,187,120,0.06))' : 'linear-gradient(90deg, rgba(255,107,107,0.12), rgba(255,107,107,0.06))';
+  el.style.border = '1px solid rgba(255,255,255,0.03)'; el.style.color = '#dfeff9';
+  document.body.appendChild(el); setTimeout(()=>el.style.opacity='0',2600); setTimeout(()=>el.remove(),3000);
+}
+
+/* close modals by clicking backdrop */
+window.onclick = function(e){
+  if(e.target.classList && e.target.classList.contains('modal')) e.target.classList.remove('active');
+};
+</script>
 </body>
 </html>
