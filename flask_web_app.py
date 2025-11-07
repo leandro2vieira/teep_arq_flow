@@ -43,6 +43,29 @@ class FlaskWebApp:
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
 
+        @self.app.route('/api/operations', methods=['DELETE'])
+        def delete_all_operations():
+            try:
+                # Prefer a dedicated method if ConfigManager provides it
+                if hasattr(self.config_manager, "clear_operations"):
+                    self.config_manager.clear_operations()
+                else:
+                    # Fallback: fetch all operations and delete them one by one
+                    ops = self.config_manager.get_operations(10_000_000)
+                    for op in ops:
+                        # expect op to contain an 'id' key
+                        op_id = op.get("id") if isinstance(op, dict) else None
+                        if op_id is None:
+                            continue
+                        try:
+                            self.config_manager.delete_operation(op_id)
+                        except Exception:
+                            # ignore individual deletion errors
+                            continue
+                return jsonify({"message": "Todos as operações deletadas"})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
         # Rota de configurações
         @self.app.route('/api/config', methods=['GET'])
         def get_config():

@@ -77,7 +77,7 @@ class GenericFileTransfer:
 
     def _send(self, action, value=None):
         resp = self._build_response(action, value)
-        self.send_message(resp, f"send_queue_index_{str(self.get_index())}")
+        self.send_message(resp, f"recv_queue_index_{str(self.get_index())}")
         return resp
 
     def _join_remote(self, base: str, part: str) -> str:
@@ -158,7 +158,7 @@ class GenericFileTransfer:
                 except Exception:
                     value_for_log = str(value_for_log)
 
-            self.send_message(response, f"send_queue_index_{str(self.get_index())}")
+            self.send_message(response, f"recv_queue_index_{str(self.get_index())}")
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
             self.config_manager.log_operation(

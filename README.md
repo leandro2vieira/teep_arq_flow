@@ -61,7 +61,7 @@ Listar arquivos do servidor local
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 60,
@@ -98,7 +98,7 @@ Listar arquivos do servidor FTP remoto
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 61,
@@ -133,7 +133,7 @@ Fazer upload de pasta local para o servidor FTP remoto
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 33, 
@@ -155,7 +155,7 @@ Fazer download de pasta do servidor FTP remoto para o local
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 55, 
@@ -177,7 +177,7 @@ Deletar pasta remoto no servidor FTP
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 64, 
@@ -201,7 +201,7 @@ Enviar arquivo local para o servidor FTP remoto
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 33, 
@@ -223,7 +223,7 @@ Fayer download de arquivo do servidor FTP remoto para o local
   }
 }
 ```
-- A resposta será enviada para a fila send_queue_index_$ RabbitMQ.
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ.
 ```json
 {
   "action": 55, 

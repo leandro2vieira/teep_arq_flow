@@ -293,6 +293,7 @@
           <h2 style="margin-top:0">Histórico de Operações</h2>
           <div style="display:flex;gap:8px;margin-bottom:12px">
             <button class="btn" onclick="loadOperations()">🔄 Atualizar</button>
+            <button class="btn ghost" onclick="confirmClearHistory()" title="Clear history">Limpar Histórico</button>
           </div>
           <div id="history-list" class="empty-state">Carregando histórico...</div>
         </section>
@@ -640,6 +641,29 @@ function showAlert(type,msg){
 window.onclick = function(e){
   if(e.target.classList && e.target.classList.contains('modal')) e.target.classList.remove('active');
 };
+
+async function confirmClearHistory(){
+  if(!confirm('Deseja limpar todo o histórico? Esta ação não pode ser desfeita.')) return;
+  await clearHistory();
+}
+
+async function clearHistory(){
+  try{
+    const res = await fetch('/api/operations', { method: 'DELETE' });
+    const body = await res.json().catch(()=>({}));
+    if(res.ok){
+      // assume a function loadOperations() exists that refreshes the history table
+      if(typeof loadOperations === 'function') loadOperations();
+      else location.reload();
+      alert(body.message || 'Histórico limpo');
+    } else {
+      alert(body.error || 'Erro ao limpar histórico');
+    }
+  } catch(e){
+    console.error(e);
+    alert('Erro ao limpar histórico');
+  }
+}
 </script>
 </body>
 </html>

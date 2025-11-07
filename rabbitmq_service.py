@@ -96,7 +96,7 @@ class RabbitMQService:
 
             if recv_queue_name not in self.consumed_queues:
                 self.channel.basic_consume(
-                    queue=recv_queue_name,
+                    queue=send_queue_name,
                     on_message_callback=_peripheral.process_message
                 )
                 self.consumed_queues.add(recv_queue_name)
