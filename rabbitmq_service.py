@@ -91,8 +91,8 @@ class RabbitMQService:
 
             recv_queue_name = f"recv_queue_index_{_index}"
             send_queue_name = f"send_queue_index_{_index}"
-            self.channel.queue_declare(queue=recv_queue_name, durable=False)
-            self.channel.queue_declare(queue=send_queue_name, durable=False)
+            self.channel.queue_declare(queue=recv_queue_name, durable=True)
+            self.channel.queue_declare(queue=send_queue_name, durable=True)
 
             if recv_queue_name not in self.consumed_queues:
                 self.channel.basic_consume(
