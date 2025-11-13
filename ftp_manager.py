@@ -105,27 +105,51 @@ class FTPManager:
                 except Exception:
                     pass
 
-    def upload_file(self, local_path: str, remote_path: str) -> bool:
+    def upload_file(self, local_path: str, remote_path: str):
+        """
+        Upload a file, with fallback to change to parent directory and STOR basename
+        when servers return errors like "550 Failed to change directory".
+        Returns dict {'success': bool, 'error': str (optional)} or boolean.
+        """
         if not self._ensure_connected():
-            return False
-        local = normalize_path(local_path)
-        remote = normalize_path(remote_path)
+            return {'success': False, 'error': 'Not connected'}
+
+        remote = normalize_path(remote_path or '')
+        if not remote:
+            logger.error("upload_file: empty remote path")
+            return {'success': False, 'error': 'empty remote path'}
+
+        if not os.path.isfile(local_path):
+            logger.error("upload_file: local file not found: %s", local_path)
+            return {'success': False, 'error': 'local file not found'}
+
         try:
-            with open(local, 'rb') as f:
-                # some servers accept full remote path in STOR, others require cwd
+            with open(local_path, 'rb') as f:
                 try:
+                    # try direct STOR with full path
                     self.ftp.storbinary(f"STOR {remote}", f)
-                except Exception:
-                    # attempt store by changing to parent dir
+                    logger.info("Uploaded file to %s", remote)
+                    return {'success': True}
+                except Exception as first_exc:
+                    logger.warning("Direct upload failed for %s: %s", remote, first_exc)
+                    # fallback: attempt to cwd to parent and STOR basename
                     parent = os.path.dirname(remote)
                     name = os.path.basename(remote)
-                    with self._cwd(parent):
-                        self.ftp.storbinary(f"STOR {name}", f)
-            logger.info("Uploaded %s -> %s", local, remote)
-            return True
+                    if not name:
+                        logger.error("upload_file: invalid remote name for %s", remote)
+                        return {'success': False, 'error': 'invalid remote name'}
+                    try:
+                        f.seek(0)
+                        with self._cwd(parent):
+                            self.ftp.storbinary(f"STOR {name}", f)
+                        logger.info("Uploaded file %s via cwd %s", name, parent)
+                        return {'success': True}
+                    except Exception as second_exc:
+                        logger.error("upload_file fallback failed for %s via cwd %s: %s", name, parent, second_exc)
+                        return {'success': False, 'error': str(second_exc)}
         except Exception as e:
-            logger.error("upload_file error: %s", e)
-            return False
+            logger.exception("upload_file error: %s", e)
+            return {'success': False, 'error': str(e)}
 
     def download_file(self, remote_path: str, local_path: str) -> bool:
         if not self._ensure_connected():
@@ -298,7 +322,6 @@ class FTPManager:
             return False
 
     def delete_file(self, remote_path: str) -> bool:
-        """Primary public method expected by other modules (alias kept)."""
         if not self._ensure_connected():
             return False
         remote = normalize_path(remote_path or '')
@@ -314,18 +337,19 @@ class FTPManager:
                 parent = os.path.dirname(remote)
                 name = os.path.basename(remote)
                 if not name:
+                    logger.error("delete_file: invalid name for %s", remote)
                     return False
-                with self._cwd(parent):
-                    self.ftp.delete(name)
-                logger.info("Deleted remote file %s via cwd %s", name, parent)
-                return True
+                try:
+                    with self._cwd(parent):
+                        self.ftp.delete(name)
+                    logger.info("Deleted remote file %s via cwd %s", name, parent)
+                    return True
+                except Exception as e:
+                    logger.warning("delete_file fallback failed for %s: %s", remote, e)
+                    return False
         except Exception as e:
             logger.error("delete_file error: %s", e)
             return False
-
-    # backward-compatible name from older code
-    def delete_remote_file(self, remote_path: str) -> bool:
-        return self.delete_file(remote_path)
 
     def delete_remote_path(self, remote_path: str) -> bool:
         if not self._ensure_connected():
@@ -360,10 +384,14 @@ class FTPManager:
                 base = os.path.basename(remote)
                 if not base:
                     return False
-                with self._cwd(parent):
-                    self.ftp.rmd(base)
-                logger.info("Removed remote directory %s via cwd %s", base, parent)
-                return True
+                try:
+                    with self._cwd(parent):
+                        self.ftp.rmd(base)
+                    logger.info("Removed remote directory %s via cwd %s", base, parent)
+                    return True
+                except Exception as e:
+                    logger.error("Failed to remove directory %s via cwd %s: %s", base, parent, e)
+                    return False
         except Exception as e:
             logger.error("delete_remote_path error: %s", e)
             return False

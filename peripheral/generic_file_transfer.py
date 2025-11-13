@@ -184,6 +184,61 @@ class GenericFileTransfer:
             logger.error(f"Erro ao processar mensagem: {e}")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
+    def _ensure_remote_dirs(self, remote_dir: str) -> bool:
+        """
+        Ensure remote_dir exists on the remote server.
+        Tries several possible APIs on self.remote, then falls back to ftp.mkd.
+        Best-effort: ignores errors for existing directories.
+        """
+        import posixpath
+
+        if not remote_dir:
+            return True
+        # normalize and build path parts
+        remote_dir = remote_dir.rstrip('/')
+        parts = [p for p in remote_dir.split('/') if p]
+        if not parts:
+            return True
+
+        cur = ''
+        for part in parts:
+            cur = posixpath.join(cur, part)
+            try:
+                # prefer high-level helpers if present
+                if hasattr(self.remote, 'make_dirs'):
+                    try:
+                        self.remote.make_dirs(cur)
+                        continue
+                    except Exception:
+                        pass
+                if hasattr(self.remote, 'ensure_dir'):
+                    try:
+                        self.remote.ensure_dir(cur)
+                        continue
+                    except Exception:
+                        pass
+                if hasattr(self.remote, 'mkdir'):
+                    try:
+                        self.remote.mkdir(cur)
+                        continue
+                    except Exception:
+                        pass
+
+                # fallback to direct ftp.mkd if ftp attribute exposed
+                ftp_obj = getattr(self.remote, 'ftp', None)
+                if ftp_obj:
+                    try:
+                        ftp_obj.mkd(cur)
+                    except Exception:
+                        # ignore (likely already exists or server path style mismatch)
+                        pass
+                else:
+                    # no known API available; continue best-effort
+                    logger.debug("No mkdir API exposed on remote manager for %s", cur)
+            except Exception as e:
+                logger.debug("Failed to ensure remote dir %s: %s", cur, e)
+        return True
+
     def _handle_upload_directory(self, local_path: str) -> Dict:
         import posixpath
         local_path = _join_path(self.local_path, local_path)
@@ -225,6 +280,13 @@ class GenericFileTransfer:
                     # build remote target path using posix style
                     remote_target = posixpath.join(remote_dir.rstrip('/'), rel_path).lstrip('/')
                     remote_target = f"/{remote_target}" if not remote_target.startswith('/') else remote_target
+
+                    # ensure parent folders exist on remote before uploading
+                    parent_remote = posixpath.dirname(remote_target)
+                    try:
+                        self._ensure_remote_dirs(parent_remote)
+                    except Exception:
+                        logger.debug("Failed to create remote parent dirs for %s", parent_remote)
 
                     try:
                         # attempt per-file upload
