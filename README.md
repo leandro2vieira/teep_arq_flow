@@ -58,7 +58,9 @@ Listar arquivos do servidor local
   "action": 58,
   "data": { 
     "index": $,
-    "value": ""
+    "value": {
+      "local_path": "/program5/"
+    }
   }
 }
 ```
@@ -95,7 +97,9 @@ Listar arquivos do servidor FTP remoto
   "action": 59,
   "data": { 
     "index": $,
-    "value": ""
+    "value": {
+      "remote_path": "/"
+    }
   }
 }
 ```
@@ -130,7 +134,10 @@ Fazer upload de pasta local para o servidor FTP remoto
   "action": 65, 
   "data": {
     "index": $, 
-    "value": "/home/ftp/"
+    "value": {
+      "local_path": "/program5/", 
+      "remote_path": "/"
+    }
   }
 }
 ```
@@ -152,7 +159,10 @@ Fazer download de pasta do servidor FTP remoto para o local
   "action": 66, 
   "data": {
     "index": $, 
-    "value": "/remote/path/"
+    "value": {
+      "local_path": "/program5/", 
+      "remote_path": "/"
+    }
   }
 }
 ```
@@ -173,8 +183,10 @@ Deletar pasta remoto no servidor FTP
 {
   "action": 64, 
   "data": {
-    "index": 1, 
-    "value": "/facchini/jobs/"
+    "index": $, 
+    "value": {
+      "remote_path": "/"
+    }
   }
 }
 ```
@@ -183,7 +195,7 @@ Deletar pasta remoto no servidor FTP
 {
   "action": 64, 
   "data": {
-    "index": 1, 
+    "index": $, 
     "value": {
       "success": true
     }, 
@@ -198,7 +210,10 @@ Enviar arquivo local para o servidor FTP remoto
   "action": 35, 
   "data": {
     "index": $, 
-    "value": "/home/ftp/job1.txt"
+    "value": {
+      "local_path": "/program5/job1.txt", 
+      "remote_path": "/"
+    }
   }
 }
 ```
@@ -220,7 +235,10 @@ Fazer download de arquivo do servidor FTP remoto para o local
   "action": 63, 
   "data": {
     "index": $, 
-    "value": "/facchini/jobs/job1.txt"
+    "value": {
+      "local_path": "/program5/", 
+      "remote_path": "/job1.txt"
+    }
   }
 }
 ```
