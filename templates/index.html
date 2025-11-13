@@ -685,7 +685,8 @@ function addIndex(event) {
                             index: parseInt(idx ?? 0),
                             notification_type: parseInt(item.notification_type ?? 0, 10) || 0,
                             interval: item.interval ?? interval,
-                            path: item.path ?? undefined
+                            server_side_path: item.server_side_path ?? undefined,
+                            remote_side_path: item.remote_side_path ?? undefined
                         };
                         // remove undefined properties for cleanliness
                         if (obj[k].path === undefined) delete obj[k].path;
@@ -716,7 +717,8 @@ function addIndex(event) {
         entry.api_save_file = "http://127.0.0.1:8000/production/api/save_new_file/";
         entry.extension = "NC";
     } else if (type === 'GENERIC_FILE_TRANSFER') {
-        entry.local_path = '/home/';
+        entry.server_side_path = "./";
+        entry.remote_side_path = "./";
     }
 
     // insert/replace key
