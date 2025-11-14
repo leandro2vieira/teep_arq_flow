@@ -6,6 +6,9 @@ from typing import Dict, Any, List
 from ftp_manager import FTPManager, normalize_path
 from scp_manager import SCPManager
 from helpers.enums import ActionTable
+from queue import Queue
+from threading import Thread
+from models.message import Message
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +47,16 @@ def _join_path(base: str, part: str) -> str:
         return f"/{part}" if part else '/'
     return f"{base}/{part}" if part else base
 
+def consume_queue(q: Queue, business_callback):
+    while True:
+        command = q.get()
+        if command is None:
+            break
+
+        business_callback(command)
 
 class GenericFileTransfer:
-    def __init__(self, config: Dict[str, Any], io_config: Dict[str, Any], send_message_callback, config_manager):
+    def __init__(self, config: Dict[str, Any], io_config: Dict[str, Any], send_message_callback, command_queue: Queue, config_manager):
         self.host = config.get('host', 'localhost')
         self.port = config.get('port', 21)
         self.user = config.get('user', 'anonymous')
@@ -55,6 +65,7 @@ class GenericFileTransfer:
         self.timeout = config.get('timeout', 30)
         self.protocol = config.get('protocol', 'ftp')
         self.remote = None
+        self.command_queue = command_queue
 
         if self.protocol.lower() == 'scp':
             self.remote = SCPManager(
@@ -77,6 +88,16 @@ class GenericFileTransfer:
 
         self.send_message = send_message_callback
         self.config_manager = config_manager
+
+        t = Thread(target=consume_queue, args=(self.command_queue, self.process_message), daemon=True)
+        t.start()
+
+    def process_message(self, message: Message):
+        if message.cmd == 'START_DEBUG':
+            logger.debug(f"Debug message received: args={message.args}, kwargs={message.kwargs}")
+
+    def get_command_queue(self) -> Queue:
+        return self.command_queue
 
     # --- helpers ----------------------------------------------------------------
 
