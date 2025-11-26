@@ -101,7 +101,7 @@ class ConfigManager:
                        )
                        ''')
 
-        # Tabela de automações
+        # Tabela de automações (mantém-se como está)
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS automation
                        (
@@ -121,7 +121,8 @@ class ConfigManager:
                        )
                        ''')
 
-        # Tabela de triggers
+        # --- Nova definição da tabela de triggers ---
+        # Agora: id, automation_id, description, queue_name, created_at
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS trigger
                        (
@@ -134,9 +135,9 @@ class ConfigManager:
                            INTEGER
                            NOT
                            NULL,
-                           trigger_type
+                           description
                            TEXT,
-                           trigger_config
+                           queue_name
                            TEXT,
                            created_at
                            TIMESTAMP
@@ -146,7 +147,8 @@ class ConfigManager:
                        )
                        ''')
 
-        # Tabela de actions
+        # --- Nova definição da tabela de actions ---
+        # Agora: id, automation_id, description, action_config (JSON/text), created_at
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS action
                        (
@@ -159,7 +161,7 @@ class ConfigManager:
                            INTEGER
                            NOT
                            NULL,
-                           action_type
+                           description
                            TEXT,
                            action_config
                            TEXT,
@@ -170,6 +172,75 @@ class ConfigManager:
                            FOREIGN KEY (automation_id) REFERENCES automation(id) ON DELETE CASCADE
                        )
                        ''')
+
+        # --- Migration checks ---, handle existing legacy schemas for trigger and action
+        def _get_columns(table_name: str):
+            cursor.execute(f"PRAGMA table_info('{table_name}')")
+            return [r[1] for r in cursor.fetchall()]
+
+        # Migrate trigger table if it has legacy columns
+        try:
+            trig_cols = _get_columns('trigger')
+            expected_trig = {'id', 'automation_id', 'description', 'queue_name', 'created_at'}
+            if set(trig_cols) != expected_trig:
+                # perform migration: rename old, create new, copy data best-effort
+                cursor.execute('ALTER TABLE trigger RENAME TO trigger_old')
+                cursor.execute('''
+                    CREATE TABLE trigger
+                    (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        automation_id INTEGER NOT NULL,
+                        description TEXT,
+                        queue_name TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (automation_id) REFERENCES automation(id) ON DELETE CASCADE
+                    )
+                ''')
+                # Best-effort copy: map existing trigger_type -> description, trigger_config -> queue_name (if text)
+                cursor.execute("SELECT id, automation_id, trigger_type, trigger_config, created_at FROM trigger_old")
+                rows = cursor.fetchall()
+                for r in rows:
+                    _id, _aid, _t_type, _t_cfg, _created = r
+                    desc = _t_type if _t_type is not None else ''
+                    qname = None
+                    if isinstance(_t_cfg, str):
+                        qname = _t_cfg
+                    # insert preserving id and created_at when possible
+                    cursor.execute('INSERT INTO trigger (id, automation_id, description, queue_name, created_at) VALUES (?,?,?,?,?)',
+                                   (_id, _aid, desc, qname, _created))
+                cursor.execute('DROP TABLE trigger_old')
+        except Exception:
+            # if trigger_old doesn't exist or other issues, ignore and continue
+            pass
+
+        # Migrate action table if it has legacy columns
+        try:
+            act_cols = _get_columns('action')
+            expected_act = {'id', 'automation_id', 'description', 'action_config', 'created_at'}
+            if set(act_cols) != expected_act:
+                cursor.execute('ALTER TABLE action RENAME TO action_old')
+                cursor.execute('''
+                    CREATE TABLE action
+                    (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        automation_id INTEGER NOT NULL,
+                        description TEXT,
+                        action_config TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (automation_id) REFERENCES automation(id) ON DELETE CASCADE
+                    )
+                ''')
+                cursor.execute("SELECT id, automation_id, action_type, action_config, created_at FROM action_old")
+                rows = cursor.fetchall()
+                for r in rows:
+                    _id, _aid, _a_type, _a_cfg, _created = r
+                    desc = _a_type if _a_type is not None else ''
+                    cfg = _a_cfg
+                    cursor.execute('INSERT INTO action (id, automation_id, description, action_config, created_at) VALUES (?,?,?,?,?)',
+                                   (_id, _aid, desc, cfg, _created))
+                cursor.execute('DROP TABLE action_old')
+        except Exception:
+            pass
 
         conn.commit()
         conn.close()
@@ -423,18 +494,11 @@ class ConfigManager:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         if automation_id is not None:
-            cursor.execute('SELECT * FROM trigger WHERE automation_id = ? ORDER BY id', (automation_id,))
+            cursor.execute('SELECT id, automation_id, description, queue_name, created_at FROM trigger WHERE automation_id = ? ORDER BY id', (automation_id,))
         else:
-            cursor.execute('SELECT * FROM trigger ORDER BY automation_id, id')
+            cursor.execute('SELECT id, automation_id, description, queue_name, created_at FROM trigger ORDER BY automation_id, id')
         results = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        # parse JSON fields
-        for r in results:
-            if r.get('trigger_config'):
-                try:
-                    r['trigger_config'] = json.loads(r['trigger_config'])
-                except Exception:
-                    pass
         return results
 
     def get_trigger(self, trigger_id: int) -> Optional[Dict]:
@@ -442,32 +506,24 @@ class ConfigManager:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM trigger WHERE id = ?', (trigger_id,))
+        cursor.execute('SELECT id, automation_id, description, queue_name, created_at FROM trigger WHERE id = ?', (trigger_id,))
         row = cursor.fetchone()
         conn.close()
         if not row:
             return None
-        result = dict(row)
-        if result.get('trigger_config'):
-            try:
-                result['trigger_config'] = json.loads(result['trigger_config'])
-            except Exception:
-                pass
-        return result
+        return dict(row)
 
     def create_trigger(self,
                       automation_id: int,
-                      trigger_type: str,
-                      trigger_config: Any = None) -> int:
+                      description: str = '',
+                      queue_name: Optional[str] = None) -> int:
         """Create a new trigger and return its id"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        t_config = json.dumps(trigger_config) if trigger_config is not None and not isinstance(
-            trigger_config, str) else trigger_config
         cursor.execute('''
-                       INSERT INTO trigger (automation_id, trigger_type, trigger_config)
+                       INSERT INTO trigger (automation_id, description, queue_name)
                        VALUES (?, ?, ?)
-                       ''', (automation_id, trigger_type, t_config))
+                       ''', (automation_id, description, queue_name))
         tid = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -476,20 +532,19 @@ class ConfigManager:
 
     def update_trigger(self,
                       trigger_id: int,
-                      trigger_type: Optional[str] = None,
-                      trigger_config: Any = None):
+                      description: Optional[str] = None,
+                      queue_name: Optional[str] = None):
         """Update an existing trigger"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         fields = []
         params = []
-        if trigger_type is not None:
-            fields.append("trigger_type = ?")
-            params.append(trigger_type)
-        if trigger_config is not None:
-            t_config = json.dumps(trigger_config) if not isinstance(trigger_config, str) else trigger_config
-            fields.append("trigger_config = ?")
-            params.append(t_config)
+        if description is not None:
+            fields.append("description = ?")
+            params.append(description)
+        if queue_name is not None:
+            fields.append("queue_name = ?")
+            params.append(queue_name)
 
         if fields:
             sql = f"UPDATE trigger SET {', '.join(fields)} WHERE id = ?"
@@ -516,12 +571,12 @@ class ConfigManager:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         if automation_id is not None:
-            cursor.execute('SELECT * FROM action WHERE automation_id = ? ORDER BY id', (automation_id,))
+            cursor.execute('SELECT id, automation_id, description, action_config, created_at FROM action WHERE automation_id = ? ORDER BY id', (automation_id,))
         else:
-            cursor.execute('SELECT * FROM action ORDER BY automation_id, id')
+            cursor.execute('SELECT id, automation_id, description, action_config, created_at FROM action ORDER BY automation_id, id')
         results = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        # parse JSON fields
+        # parse JSON fields in action_config
         for r in results:
             if r.get('action_config'):
                 try:
@@ -535,7 +590,7 @@ class ConfigManager:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM action WHERE id = ?', (action_id,))
+        cursor.execute('SELECT id, automation_id, description, action_config, created_at FROM action WHERE id = ?', (action_id,))
         row = cursor.fetchone()
         conn.close()
         if not row:
@@ -550,17 +605,16 @@ class ConfigManager:
 
     def create_action(self,
                      automation_id: int,
-                     action_type: str,
+                     description: str = '',
                      action_config: Any = None) -> int:
         """Create a new action and return its id"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        a_config = json.dumps(action_config) if action_config is not None and not isinstance(
-            action_config, str) else action_config
+        a_config = json.dumps(action_config) if action_config is not None and not isinstance(action_config, str) else action_config
         cursor.execute('''
-                       INSERT INTO action (automation_id, action_type, action_config)
+                       INSERT INTO action (automation_id, description, action_config)
                        VALUES (?, ?, ?)
-                       ''', (automation_id, action_type, a_config))
+                       ''', (automation_id, description, a_config))
         aid = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -569,16 +623,16 @@ class ConfigManager:
 
     def update_action(self,
                      action_id: int,
-                     action_type: Optional[str] = None,
+                     description: Optional[str] = None,
                      action_config: Any = None):
         """Update an existing action"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         fields = []
         params = []
-        if action_type is not None:
-            fields.append("action_type = ?")
-            params.append(action_type)
+        if description is not None:
+            fields.append("description = ?")
+            params.append(description)
         if action_config is not None:
             a_config = json.dumps(action_config) if not isinstance(action_config, str) else action_config
             fields.append("action_config = ?")
@@ -600,4 +654,3 @@ class ConfigManager:
         conn.commit()
         conn.close()
         logger.info(f"Action id={action_id} deleted")
-

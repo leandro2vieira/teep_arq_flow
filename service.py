@@ -46,6 +46,7 @@ def main():
     """Função principal"""
     global rabbitmq_service
     global web_service
+    global command_queue
 
     config_manager = ConfigManager()
     # Obter porta da web do config ou usar padrão

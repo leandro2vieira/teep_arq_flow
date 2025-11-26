@@ -82,6 +82,8 @@ class RabbitMQService:
     def declare_queues(self):
         """Declara as filas necessárias"""
         peripherals = self.config_manager.get_peripherals()
+        automations = self.config_manager.get_automations()
+        logger.info(f"Declarando filas para {len(peripherals)} periféricos e {len(automations)} automações")
 
         # allow this consumer to receive only one unacked message at a time
         # set QoS once for the channel
@@ -111,17 +113,103 @@ class RabbitMQService:
             self.channel.queue_declare(queue=recv_queue_name, durable=True)
             self.channel.queue_declare(queue=send_queue_name, durable=True)
 
-            if recv_queue_name not in self.consumed_queues:
+            # register the consumer callback for the send queue (server -> device)
+            if send_queue_name not in self.consumed_queues:
                 self.channel.basic_consume(
                     queue=send_queue_name,
                     on_message_callback=_peripheral.process_message
                 )
-                self.consumed_queues.add(recv_queue_name)
-                logger.info(f"consuming queue: {recv_queue_name}")
+                self.consumed_queues.add(send_queue_name)
+                logger.info(f"consuming queue: {send_queue_name}")
 
             self.queue_pool[_index] = _peripheral.get_command_queue()
 
             logger.info(f"Filas declaradas: {recv_queue_name} - {send_queue_name}")
+
+        try:
+            for automation in automations:
+                logger.info(f"Processing automation: {automation}")
+                triggers = self.config_manager.get_triggers(automation.id)
+                for trigger in triggers:
+                    queue_name = trigger.get('queue_name')
+                    if queue_name and queue_name not in self.consumed_queues:
+                        self.channel.queue_declare(queue=queue_name, durable=True)
+
+                        actions = self.config_manager.get_actions(automation.id)
+                        target_queues = []
+                        for action in actions:
+                            action_type = action.get('description')
+                            if action_type == 'forward_to_rabbitmq':
+                                _target_queues = action.get('action_config', [])
+                                for target_queue in target_queues:
+                                    send_to = target_queue.get('sent_to')
+                                    if send_to and send_to not in self.consumed_queues:
+                                        # self.channel.queue_declare(queue=send_to, durable=True)
+                                        # self.consumed_queues.add(send_to)
+                                        logger.info(f"registering target queue: {send_to}")
+                                    target_queues.append(send_to)
+
+                        def make_callback(qname, __target_queues):
+                            def callback(ch, method, properties, body):
+                                message = Message.from_json(body)
+                                logger.info(f"Mensagem recebida na fila '{qname}': {body}")
+                                self.route_to_next_queue(message)
+                                for _target_queue in __target_queues:
+                                    self.send_message(message, _target_queue)
+                                ch.basic_ack(delivery_tag=method.delivery_tag)
+                            return callback
+
+                        self.channel.basic_consume(
+                            queue=queue_name,
+                            on_message_callback=make_callback(queue_name, target_queues)
+                        )
+                        self.consumed_queues.add(queue_name)
+                        logger.info(f"consuming queue: {queue_name}")
+        except Exception as e:
+            logger.error(f"Erro ao declarar filas de automação: {e}")
+
+
+    def start(self):
+        """Inicia o serviço"""
+        self.running = True
+
+        while self.running:
+            if not self.connect():
+                logger.error(f"Falha ao iniciar serviço RabbitMQ, tentar novamente em {self.retry_delay} segundos...")
+                time.sleep(self.retry_delay)
+                continue
+
+            try:
+                self.declare_queues()
+
+                t = Thread(target=consume_queue, args=(self.command_queue, self.route_to_next_queue), daemon=True)
+                t.start()
+
+                logger.info("Serviço RabbitMQ iniciado. Aguardando mensagens...")
+
+                # Use connection.process_data_events() in a loop to allow quick interruption
+                while self.running:
+                    try:
+                        # process callbacks (from basic_consume) and wait up to 1 second
+                        self.connection.process_data_events(time_limit=1)
+                    except Exception as e:
+                        logger.error(f"Erro durante processamento de eventos: {e}")
+                        # break to trigger reconnect/stop flow
+                        break
+
+            except KeyboardInterrupt:
+                logger.info("KeyboardInterrupt recebido, parando serviço...")
+                self.stop()
+            except ValueError as ve:
+                logger.error(f"Erro de configuração: {ve}")
+                self.stop()
+            except Exception as e:
+                logger.error(f"Erro no serviço RabbitMQ: {e}")
+                if self.running:
+                    self.reconnect()
+            finally:
+                if not self.running:
+                    break
 
     def reconnect_now(self) -> bool:
         """Force re-establish the RabbitMQ connection immediately.
@@ -170,57 +258,6 @@ class RabbitMQService:
 
         _queue = self.queue_pool.get(message.index)
         _queue.put(message)
-
-    def start(self):
-        """Inicia o serviço"""
-        self.running = True
-
-        while self.running:
-            if not self.connect():
-                logger.error(f"Falha ao iniciar serviço RabbitMQ, tentar novamente em {self.retry_delay} segundos...")
-                time.sleep(self.retry_delay)
-                continue
-
-            try:
-                self.declare_queues()
-
-                t = Thread(target=consume_queue, args=(self.command_queue, self.route_to_next_queue), daemon=True)
-                t.start()
-
-                logger.info("Serviço RabbitMQ iniciado. Aguardando mensagens...")
-
-                # Use um loop manual em vez de start_consuming() para permitir interrupção mais rápida
-                for method_frame, properties, body in self.channel.consume(inactivity_timeout=1):
-                    if not self.running:
-                        logger.info("Serviço foi sinalizado para parar, encerrando consumo...")
-                        break
-
-                    if method_frame is None:
-                        # Timeout de inatividade - continue o loop para verificar self.running
-                        continue
-
-                    # Processar mensagem
-                    try:
-                        # Aqui você pode processar a mensagem se necessário
-                        # Por enquanto, apenas confirmamos
-                        self.channel.basic_ack(method_frame.delivery_tag)
-                    except Exception as e:
-                        logger.error(f"Erro ao processar mensagem: {e}")
-                        self.channel.basic_nack(method_frame.delivery_tag)
-
-            except KeyboardInterrupt:
-                logger.info("KeyboardInterrupt recebido, parando serviço...")
-                self.stop()
-            except ValueError as ve:
-                logger.error(f"Erro de configuração: {ve}")
-                self.stop()
-            except Exception as e:
-                logger.error(f"Erro no serviço RabbitMQ: {e}")
-                if self.running:
-                    self.reconnect()
-            finally:
-                if not self.running:
-                    break
 
     def reconnect(self) -> bool:
         """Fecha conecoes existentes e tenta reconectar"""

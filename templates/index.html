@@ -494,22 +494,18 @@
         <input type="hidden" id="triggerAutomationId" />
 
         <div class="form-group">
-          <label>Tipo de Trigger *</label>
-          <select id="triggerType" required onchange="updateTriggerConfigFields()">
-            <option value="">-- Selecionar --</option>
-            <option value="SCHEDULE">Agendamento</option>
-            <option value="FILE_CREATED">Arquivo Criado</option>
-            <option value="FILE_MODIFIED">Arquivo Modificado</option>
-            <option value="PERIPHERAL_STATE">Estado do Periférico</option>
-            <option value="MANUAL">Manual</option>
-          </select>
+          <label>Descrição *</label>
+          <input type="text" id="triggerDescription" required placeholder="Descrição do trigger (ex: Escuta fila X)">
         </div>
 
-        <div id="triggerConfigFields" style="margin-top:10px"></div>
+        <div class="form-group">
+          <label>Fila (queue_name) *</label>
+          <input type="text" id="triggerQueueName" required placeholder="Nome da fila RabbitMQ">
+        </div>
 
         <div class="form-group">
-          <label>Configuração (JSON)</label>
-          <textarea id="triggerConfig" rows="4" placeholder='{"cron":"0 0 * * *"}'></textarea>
+          <label>Configuração adicional (JSON, opcional)</label>
+          <textarea id="triggerExtraConfig" rows="4" placeholder='{"key":"value"}'></textarea>
         </div>
 
         <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
@@ -529,22 +525,17 @@
         <input type="hidden" id="actionAutomationId" />
 
         <div class="form-group">
-          <label>Tipo de Action *</label>
-          <select id="actionType" required onchange="updateActionConfigFields()">
-            <option value="">-- Selecionar --</option>
-            <option value="UPLOAD_FILE">Upload de Arquivo</option>
-            <option value="DOWNLOAD_FILE">Download de Arquivo</option>
-            <option value="DELETE_FILE">Deletar Arquivo</option>
-            <option value="EXECUTE_COMMAND">Executar Comando</option>
-            <option value="SEND_NOTIFICATION">Enviar Notificação</option>
-          </select>
+          <label>Descrição (tipo) *</label>
+          <input type="text" id="actionDescription" required placeholder="Ex: multiplex_peripherals">
         </div>
-
-        <div id="actionConfigFields" style="margin-top:10px"></div>
 
         <div class="form-group">
           <label>Configuração (JSON)</label>
-          <textarea id="actionConfig" rows="4" placeholder='{"source":"/path/to/file","destination":"/remote/path"}'></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <button type="button" class="btn" onclick="insertDefaultActionConfig()">Inserir JSON padrão</button>
+            <small style="color:var(--muted)">Adiciona {"send_to":"recv_queue_index__1"} à lista</small>
+          </div>
+          <textarea id="actionConfig" rows="6" placeholder='{"source":"/path","destination":"/remote"}'></textarea>
         </div>
 
         <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
@@ -650,10 +641,12 @@ async function loadPeripherals(){
     const data = await res.json();
     if(!data || data.length === 0){ list.innerHTML = '<div class="empty-state">Nenhum periférico encontrado</div>'; return; }
     const rows = data.map(p => `<tr>
+      <td>${p.id}</td>
       <td>${escapeHtml(p.name||'')}</td>
       <td>${escapeHtml(p.interface||'')}</td>
       <td>${escapeHtml(p.device||'')}</td>
       <td>${escapeHtml(p.model||'')}</td>
+      <td>${formatDate(p.last_update)}</td>
       <td style="text-align:right">
         <div class="actions">
           <button class="btn" onclick="openPeripheralModal(${p.id})">Editar</button>
@@ -661,7 +654,7 @@ async function loadPeripherals(){
         </div>
       </td>
     </tr>`).join('');
-    list.innerHTML = `<table><thead><tr><th>Nome</th><th>Interface</th><th>Dispositivo</th><th>Modelo</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    list.innerHTML = `<table><thead><tr><th>ID</th><th>Nome</th><th>Interface</th><th>Dispositivo</th><th>Modelo</th><th>Última Atualização</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   } catch(e){ list.innerHTML = '<div class="empty-state">Erro ao carregar periféricos</div>'; console.error(e); }
 }
 
@@ -844,6 +837,50 @@ function insertDefaultConnectionParams() {
     }
 }
 
+function insertDefaultActionConfig(){
+  const ta = document.getElementById('actionConfig');
+  if(!ta) return;
+
+  const raw = ta.value.trim();
+  const defaultObj = { send_to: "recv_queue_index__1" };
+
+  if(!raw){
+    // empty -> create an array with the default object
+    ta.value = JSON.stringify([defaultObj], null, 2);
+    showAlert('success','JSON padrão inserido');
+    return;
+  }
+
+  // Try to parse existing content
+  try{
+    const parsed = JSON.parse(raw);
+    if(Array.isArray(parsed)){
+      parsed.push(defaultObj);
+      ta.value = JSON.stringify(parsed, null, 2);
+      showAlert('success','Item padrão adicionado à lista');
+      return;
+    }
+    if(parsed && typeof parsed === 'object'){
+      // convert single object into array
+      const arr = [parsed, defaultObj];
+      ta.value = JSON.stringify(arr, null, 2);
+      showAlert('success','Campo convertido para lista e item padrão adicionado');
+      return;
+    }
+    // fallback: overwrite with array
+    ta.value = JSON.stringify([defaultObj], null, 2);
+    showAlert('success','Campo substituído por lista com JSON padrão');
+  }catch(e){
+    // invalid JSON: ask user to confirm replacement
+    if(confirm('JSON inválido no campo. Deseja substituir pelo JSON padrão?')){
+      ta.value = JSON.stringify([defaultObj], null, 2);
+      showAlert('success','Campo substituído por lista com JSON padrão');
+    } else {
+      showAlert('error','Operação cancelada — corrija o JSON e tente novamente');
+    }
+  }
+}
+
 function addIndex(event) {
     const chEl = document.getElementById('newIndexChannel');
     const typeEl = document.getElementById('newIndexType');
@@ -981,7 +1018,33 @@ function parseJsonField(id){ const v=document.getElementById(id).value.trim(); i
 function prettyJson(v){ if(v===undefined||v===null) return ''; try{ return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v, null, 2); }catch(e){ return typeof v === 'string' ? v : JSON.stringify(v); } }
 function escapeHtml(s){ if(s===undefined||s===null) return ''; return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]); }
 function escapeJs(s){ if(s===undefined||s===null) return ''; return String(s).replace(/['"\\]/g,'\\\\$&').replace(/\n/g,'\\n'); }
-function formatDate(d){ if(!d) return 'N/A'; try{ return new Date(d*1000).toLocaleString('pt-BR'); }catch(e){ return String(d); } }
+function formatDate(d){
+  if(!d && d !== 0) return 'N/A';
+  try{
+    // numbers: distinguish seconds vs milliseconds
+    if(typeof d === 'number'){
+      const asMs = d > 1e12 ? d : d * 1000; // if already ms (> ~2001) treat as ms
+      return new Date(asMs).toLocaleString('pt-BR');
+    }
+    // strings: try to parse as ISO or numeric
+    if(typeof d === 'string'){
+      // trim
+      const s = d.trim();
+      // numeric string?
+      if(/^\d+$/.test(s)){
+        const n = Number(s);
+        const asMs = n > 1e12 ? n : n * 1000;
+        return new Date(asMs).toLocaleString('pt-BR');
+      }
+      const parsed = Date.parse(s);
+      if(!isNaN(parsed)) return new Date(parsed).toLocaleString('pt-BR');
+    }
+    // fallback
+    return String(d);
+  }catch(e){
+    return String(d);
+  }
+}
 
 function showAlert(type,msg){
   const el = document.createElement('div');
@@ -1034,7 +1097,7 @@ async function loadAutomations() {
       return;
     }
 
-    let html = '<table><thead><tr><th>ID</th><th>Nome</th><th>Triggers</th><th>Actions</th><th>Criado em</th><th>Ações</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>ID</th><th>Nome</th><th>Triggers</th><th>Ações</th><th>Criado em</th><th>Ações</th></tr></thead><tbody>';
 
     for (const auto of automations) {
       const triggers = await fetch(`/api/triggers?automation_id=${auto.id}`).then(r => r.json()).catch(() => []);
@@ -1142,7 +1205,7 @@ async function deleteAutomation(id) {
   } catch (e) {
     console.error(e);
     showAlert('error', 'Erro ao deletar automação');
-  }
+ }
 }
 
 // ==================== TRIGGER FUNCTIONS ====================
@@ -1158,13 +1221,16 @@ async function loadTriggersForAutomation(automationId) {
       return;
     }
 
-    let html = '<table style="font-size:0.9rem"><thead><tr><th>ID</th><th>Tipo</th><th>Config</th><th>Ações</th></tr></thead><tbody>';
+    let html = '<table style="font-size:0.9rem"><thead><tr><th>ID</th><th>Descrição</th><th>Fila</th><th>Config</th><th>Ações</th></tr></thead><tbody>';
 
     for (const trigger of triggers) {
+      const cfg = trigger.queue_name || '';
+      const extra = trigger.created_at ? trigger.created_at : '';
       html += `<tr>
         <td>${trigger.id}</td>
-        <td>${escapeHtml(trigger.trigger_type)}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(JSON.stringify(trigger.trigger_config || {}))}</td>
+        <td>${escapeHtml(trigger.description||'')}</td>
+        <td>${escapeHtml(cfg)}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(JSON.stringify(trigger.extra || {}))}</td>
         <td style="text-align:right">
           <div class="actions">
             <button class="btn" style="padding:4px 8px;font-size:0.85rem" onclick="editTrigger(${trigger.id})">Editar</button>
@@ -1192,9 +1258,9 @@ function openTriggerModal() {
   document.getElementById('triggerModalTitle').textContent = 'Novo Trigger';
   document.getElementById('triggerId').value = '';
   document.getElementById('triggerAutomationId').value = automationId;
-  document.getElementById('triggerType').value = '';
-  document.getElementById('triggerConfig').value = '';
-  document.getElementById('triggerConfigFields').innerHTML = '';
+  document.getElementById('triggerDescription').value = '';
+  document.getElementById('triggerQueueName').value = '';
+  document.getElementById('triggerExtraConfig').value = '';
   document.getElementById('triggerModal').classList.add('active');
 }
 
@@ -1209,11 +1275,12 @@ async function editTrigger(id) {
 
     document.getElementById('triggerModalTitle').textContent = 'Editar Trigger';
     document.getElementById('triggerId').value = trigger.id;
-    document.getElementById('triggerAutomationId').value = trigger.automation_id;
-    document.getElementById('triggerType').value = trigger.trigger_type || '';
-    document.getElementById('triggerConfig').value = prettyJson(trigger.trigger_config);
+    document.getElementById('triggerAutomationId').value = trigger.automation_id || '';
+    document.getElementById('triggerDescription').value = trigger.description || '';
+    document.getElementById('triggerQueueName').value = trigger.queue_name || '';
+    // put any extra config into extra field
+    try { document.getElementById('triggerExtraConfig').value = JSON.stringify(trigger.trigger_config || {}, null, 2); } catch(e){ document.getElementById('triggerExtraConfig').value = '' }
 
-    updateTriggerConfigFields();
     document.getElementById('triggerModal').classList.add('active');
   } catch (e) {
     console.error(e);
@@ -1225,37 +1292,26 @@ async function saveTrigger(e) {
   e.preventDefault();
   const id = document.getElementById('triggerId').value;
   const automationId = document.getElementById('triggerAutomationId').value;
-  const triggerType = document.getElementById('triggerType').value;
-  const triggerConfig = parseJsonField('triggerConfig');
+  const description = document.getElementById('triggerDescription').value;
+  const queueName = document.getElementById('triggerQueueName').value;
+  const extra = parseJsonField('triggerExtraConfig');
 
-  const data = {
-    automation_id: parseInt(automationId),
-    trigger_type: triggerType,
-    trigger_config: triggerConfig
+  if (!automationId || !queueName) return showAlert('error','Automation ID e Queue são obrigatórios');
+
+  const payload = {
+    automation_id: Number(automationId),
+    description: description,
+    queue_name: queueName,
   };
+  if (extra !== null) payload.trigger_config = extra; // keep legacy field if needed
 
-  const method = id ? 'PUT' : 'POST';
-  const url = id ? `/api/triggers/${id}` : '/api/triggers';
-
-  try {
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const body = await res.json();
-
-    if (res.ok) {
-      showAlert('success', body.message || 'Trigger salvo');
-      closeTriggerModal();
-      loadTriggersForAutomation(automationId);
-    } else {
-      showAlert('error', body.error || 'Erro ao salvar');
-    }
-  } catch (e) {
-    console.error(e);
-    showAlert('error', 'Erro ao salvar trigger');
-  }
+  try{
+    const url = id ? `/api/triggers/${id}` : '/api/triggers';
+    const method = id ? 'PUT' : 'POST';
+    const res = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(res.ok){ closeTriggerModal(); loadTriggersForAutomation(automationId); showAlert('success', id ? 'Trigger atualizado' : 'Trigger criado'); }
+    else { const err = await res.json().catch(()=>({})); showAlert('error', err.error || 'Erro ao salvar trigger'); }
+  } catch(e){ console.error(e); showAlert('error','Erro ao salvar trigger'); }
 }
 
 async function deleteTrigger(id) {
@@ -1263,7 +1319,7 @@ async function deleteTrigger(id) {
 
   try {
     const res = await fetch(`/api/triggers/${id}`, { method: 'DELETE' });
-    const body = await res.json();
+    const body = await res.json().catch(()=>({}));
 
     if (res.ok) {
       showAlert('success', body.message || 'Trigger deletado');
@@ -1275,22 +1331,6 @@ async function deleteTrigger(id) {
   } catch (e) {
     console.error(e);
     showAlert('error', 'Erro ao deletar trigger');
-  }
-}
-
-function updateTriggerConfigFields() {
-  const type = document.getElementById('triggerType').value;
-  const container = document.getElementById('triggerConfigFields');
-
-  // Add helpful fields based on trigger type
-  if (type === 'SCHEDULE') {
-    container.innerHTML = '<div class="form-group"><label>Cron Expression</label><input type="text" placeholder="0 0 * * *" id="triggerCron"></div>';
-  } else if (type === 'FILE_CREATED' || type === 'FILE_MODIFIED') {
-    container.innerHTML = '<div class="form-group"><label>Caminho do Arquivo</label><input type="text" placeholder="/path/to/watch" id="triggerPath"></div>';
-  } else if (type === 'PERIPHERAL_STATE') {
-    container.innerHTML = '<div class="form-group"><label>Peripheral ID</label><input type="number" id="triggerPeripheralId"></div>';
-  } else {
-    container.innerHTML = '';
   }
 }
 
@@ -1312,7 +1352,7 @@ async function loadActionsForAutomation(automationId) {
     for (const action of actions) {
       html += `<tr>
         <td>${action.id}</td>
-        <td>${escapeHtml(action.action_type)}</td>
+        <td>${escapeHtml(action.description)}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(JSON.stringify(action.action_config || {}))}</td>
         <td style="text-align:right">
           <div class="actions">
@@ -1341,9 +1381,8 @@ function openActionModal() {
   document.getElementById('actionModalTitle').textContent = 'Nova Action';
   document.getElementById('actionId').value = '';
   document.getElementById('actionAutomationId').value = automationId;
-  document.getElementById('actionType').value = '';
+  document.getElementById('actionDescription').value = '';
   document.getElementById('actionConfig').value = '';
-  document.getElementById('actionConfigFields').innerHTML = '';
   document.getElementById('actionModal').classList.add('active');
 }
 
@@ -1359,10 +1398,9 @@ async function editAction(id) {
     document.getElementById('actionModalTitle').textContent = 'Editar Action';
     document.getElementById('actionId').value = action.id;
     document.getElementById('actionAutomationId').value = action.automation_id;
-    document.getElementById('actionType').value = action.action_type || '';
+    document.getElementById('actionDescription').value = action.description || '';
     document.getElementById('actionConfig').value = prettyJson(action.action_config);
 
-    updateActionConfigFields();
     document.getElementById('actionModal').classList.add('active');
   } catch (e) {
     console.error(e);
@@ -1374,12 +1412,12 @@ async function saveAction(e) {
   e.preventDefault();
   const id = document.getElementById('actionId').value;
   const automationId = document.getElementById('actionAutomationId').value;
-  const actionType = document.getElementById('actionType').value;
+  const description = document.getElementById('actionDescription').value;
   const actionConfig = parseJsonField('actionConfig');
 
   const data = {
     automation_id: parseInt(automationId),
-    action_type: actionType,
+    description: description,
     action_config: actionConfig
   };
 
@@ -1406,48 +1444,7 @@ async function saveAction(e) {
     showAlert('error', 'Erro ao salvar action');
   }
 }
-
-async function deleteAction(id) {
-  if (!confirm('Deseja deletar esta action?')) return;
-
-  try {
-    const res = await fetch(`/api/actions/${id}`, { method: 'DELETE' });
-    const body = await res.json();
-
-    if (res.ok) {
-      showAlert('success', body.message || 'Action deletada');
-      const automationId = document.getElementById('automationId').value;
-      if (automationId) loadActionsForAutomation(automationId);
-    } else {
-      showAlert('error', body.error || 'Erro ao deletar');
-    }
-  } catch (e) {
-    console.error(e);
-    showAlert('error', 'Erro ao deletar action');
-  }
-}
-
-function updateActionConfigFields() {
-  const type = document.getElementById('actionType').value;
-  const container = document.getElementById('actionConfigFields');
-
-  // Add helpful fields based on action type
-  if (type === 'UPLOAD_FILE' || type === 'DOWNLOAD_FILE') {
-    container.innerHTML = `
-      <div class="form-group"><label>Source Path</label><input type="text" placeholder="/local/path" id="actionSource"></div>
-      <div class="form-group"><label>Destination Path</label><input type="text" placeholder="/remote/path" id="actionDestination"></div>
-    `;
-  } else if (type === 'DELETE_FILE') {
-    container.innerHTML = '<div class="form-group"><label>File Path</label><input type="text" placeholder="/path/to/file" id="actionFilePath"></div>';
-  } else if (type === 'EXECUTE_COMMAND') {
-    container.innerHTML = '<div class="form-group"><label>Command</label><input type="text" placeholder="ls -la" id="actionCommand"></div>';
-  } else if (type === 'SEND_NOTIFICATION') {
-    container.innerHTML = '<div class="form-group"><label>Message</label><textarea id="actionMessage" rows="3"></textarea></div>';
-  } else {
-    container.innerHTML = '';
-  }
-}
-
 </script>
 </body>
 </html>
+

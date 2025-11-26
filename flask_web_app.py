@@ -242,14 +242,21 @@ class FlaskWebApp:
         def create_trigger():
             data = request.get_json() or {}
             automation_id = data.get('automation_id')
-            trigger_type = data.get('trigger_type')
-            if not automation_id or not trigger_type:
-                return jsonify({'error': 'Fields "automation_id" and "trigger_type" are required'}), 400
+            # support both new (description, queue_name) and old (trigger_type, trigger_config)
+            description = data.get('description') or data.get('trigger_type')
+            queue_name = data.get('queue_name')
+            if not queue_name:
+                # fallback: if trigger_config is a plain string, treat it as queue_name
+                tcfg = data.get('trigger_config')
+                if isinstance(tcfg, str) and tcfg.strip():
+                    queue_name = tcfg.strip()
+            if not automation_id or not queue_name:
+                return jsonify({'error': 'Fields "automation_id" and "queue_name" are required'}), 400
             try:
                 tid = self.config_manager.create_trigger(
                     automation_id=automation_id,
-                    trigger_type=trigger_type,
-                    trigger_config=data.get('trigger_config')
+                    description=description or '',
+                    queue_name=queue_name
                 )
                 return jsonify({'id': tid, 'message': 'Trigger created'}), 201
             except Exception as e:
@@ -258,21 +265,16 @@ class FlaskWebApp:
         @self.app.route('/api/triggers/<int:trigger_id>', methods=['PUT'])
         def update_trigger(trigger_id):
             data = request.get_json() or {}
+            # accept description/queue_name or old names
+            description = data.get('description') if 'description' in data else data.get('trigger_type')
+            queue_name = data.get('queue_name') if 'queue_name' in data else data.get('trigger_config')
             try:
                 self.config_manager.update_trigger(
                     trigger_id=trigger_id,
-                    trigger_type=data.get('trigger_type'),
-                    trigger_config=data.get('trigger_config')
+                    description=description,
+                    queue_name=queue_name
                 )
                 return jsonify({'message': 'Trigger updated'})
-            except Exception as e:
-                return jsonify({'error': str(e)}), 400
-
-        @self.app.route('/api/triggers/<int:trigger_id>', methods=['DELETE'])
-        def delete_trigger(trigger_id):
-            try:
-                self.config_manager.delete_trigger(trigger_id)
-                return jsonify({'message': 'Trigger deleted'})
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
 
@@ -294,14 +296,16 @@ class FlaskWebApp:
         def create_action():
             data = request.get_json() or {}
             automation_id = data.get('automation_id')
-            action_type = data.get('action_type')
-            if not automation_id or not action_type:
-                return jsonify({'error': 'Fields "automation_id" and "action_type" are required'}), 400
+            # support both new (description, action_config) and old (action_type, action_config)
+            description = data.get('description') or data.get('action_type')
+            action_config = data.get('action_config')
+            if action_config is None:
+                return jsonify({'error': 'Field "action_config" is required'}), 400
             try:
                 aid = self.config_manager.create_action(
                     automation_id=automation_id,
-                    action_type=action_type,
-                    action_config=data.get('action_config')
+                    description=description or '',
+                    action_config=action_config
                 )
                 return jsonify({'id': aid, 'message': 'Action created'}), 201
             except Exception as e:
@@ -310,21 +314,15 @@ class FlaskWebApp:
         @self.app.route('/api/actions/<int:action_id>', methods=['PUT'])
         def update_action(action_id):
             data = request.get_json() or {}
+            description = data.get('description') if 'description' in data else data.get('action_type')
+            action_config = data.get('action_config') if 'action_config' in data else None
             try:
                 self.config_manager.update_action(
                     action_id=action_id,
-                    action_type=data.get('action_type'),
-                    action_config=data.get('action_config')
+                    description=description,
+                    action_config=action_config
                 )
                 return jsonify({'message': 'Action updated'})
-            except Exception as e:
-                return jsonify({'error': str(e)}), 400
-
-        @self.app.route('/api/actions/<int:action_id>', methods=['DELETE'])
-        def delete_action(action_id):
-            try:
-                self.config_manager.delete_action(action_id)
-                return jsonify({'message': 'Action deleted'})
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
 
@@ -339,3 +337,4 @@ class FlaskWebApp:
         if self.server:
             self.server.shutdown()
             logger.info("Servidor web parado")
+
