@@ -129,13 +129,13 @@ class RabbitMQService:
         try:
             for automation in automations:
                 logger.info(f"Processing automation: {automation}")
-                triggers = self.config_manager.get_triggers(automation.id)
+                triggers = self.config_manager.get_triggers(automation.get('id'))
                 for trigger in triggers:
                     queue_name = trigger.get('queue_name')
                     if queue_name and queue_name not in self.consumed_queues:
                         self.channel.queue_declare(queue=queue_name, durable=True)
 
-                        actions = self.config_manager.get_actions(automation.id)
+                        actions = self.config_manager.get_actions(automation.get('id'))
                         target_queues = []
                         for action in actions:
                             action_type = action.get('description')
@@ -155,6 +155,7 @@ class RabbitMQService:
                                 logger.info(f"Mensagem recebida na fila '{qname}': {body}")
                                 self.route_to_next_queue(message)
                                 for _target_queue in __target_queues:
+                                    logger.info(f"Roteando mensagem para fila: {_target_queue}")
                                     self.send_message(message, _target_queue)
                                 ch.basic_ack(delivery_tag=method.delivery_tag)
                             return callback
