@@ -83,16 +83,68 @@ class RabbitMQService:
         """Declara as filas necessárias"""
         peripherals = self.config_manager.get_peripherals()
         automations = self.config_manager.get_automations()
+        logger.info(f"Declarando filas para {len(peripherals) if hasattr(peripherals,'__len__') else 'unknown'} periféricos e {len(automations) if hasattr(automations,'__len__') else 'unknown'} automações")
+
+        # Defensive: if config methods returned JSON strings or malformed data, try to recover
+        if isinstance(peripherals, str):
+            try:
+                peripherals = json.loads(peripherals)
+            except Exception:
+                logger.error("peripherals config is a string but could not be parsed as JSON: %r", peripherals)
+                peripherals = []
+        if not isinstance(peripherals, (list, tuple)):
+            logger.error("peripherals config is not a list/tuple, got %r. Skipping.", type(peripherals))
+            peripherals = []
+
+        if isinstance(automations, str):
+            try:
+                automations = json.loads(automations)
+            except Exception:
+                logger.error("automations config is a string but could not be parsed as JSON: %r", automations)
+                automations = []
+        if not isinstance(automations, (list, tuple)):
+            logger.error("automations config is not a list/tuple, got %r. Skipping.", type(automations))
+            automations = []
+
         logger.info(f"Declarando filas para {len(peripherals)} periféricos e {len(automations)} automações")
 
         # allow this consumer to receive only one unacked message at a time
         # set QoS once for the channel
-        self.channel.basic_qos(prefetch_count=1)
+        try:
+            self.channel.basic_qos(prefetch_count=1)
+        except Exception as e:
+            logger.warning(f"Could not set basic_qos on channel: {e}")
 
         for peripheral in peripherals:
 
+            # Ensure peripheral is a dict-like object
+            if not isinstance(peripheral, dict):
+                logger.warning("Skipping peripheral with unexpected type %s: %r", type(peripheral).__name__, peripheral)
+                continue
+
             json_channel_to_virtual_index = peripheral.get('json_channel_to_virtual_index', {})
             json_connection_params = peripheral.get('json_connection_params', {})
+
+            # Defensive validation: these fields may come as JSON strings or other types.
+            if isinstance(json_connection_params, str):
+                try:
+                    json_connection_params = json.loads(json_connection_params)
+                except Exception:
+                    logger.error("json_connection_params is a string but could not be parsed as JSON for peripheral %r: %r", peripheral, json_connection_params)
+                    json_connection_params = {}
+            if not isinstance(json_connection_params, dict):
+                logger.warning("json_connection_params is not a dict for peripheral %r, got %r; using empty config", peripheral, type(json_connection_params))
+                json_connection_params = {}
+
+            if isinstance(json_channel_to_virtual_index, str):
+                try:
+                    json_channel_to_virtual_index = json.loads(json_channel_to_virtual_index)
+                except Exception:
+                    logger.error("json_channel_to_virtual_index is a string but could not be parsed as JSON for peripheral %r: %r", peripheral, json_channel_to_virtual_index)
+                    json_channel_to_virtual_index = {}
+            if not isinstance(json_channel_to_virtual_index, dict):
+                logger.warning("json_channel_to_virtual_index is not a dict for peripheral %r, got %r; using empty mapping", peripheral, type(json_channel_to_virtual_index))
+                json_channel_to_virtual_index = {}
 
             logger.info(f"Peripheral params: {json_connection_params}")
             logger.info(f"Virtual Indexes: {json_channel_to_virtual_index}")
@@ -128,33 +180,79 @@ class RabbitMQService:
 
         try:
             for automation in automations:
+                if not isinstance(automation, dict):
+                    logger.warning("Skipping automation with unexpected type %s: %r", type(automation).__name__, automation)
+                    continue
+
                 logger.info(f"Processing automation: {automation}")
-                triggers = self.config_manager.get_triggers(automation.get('id'))
+                automation_id = automation.get('id')
+                triggers = self.config_manager.get_triggers(automation_id)
+
+                # Defensive: normalize triggers if needed
+                if isinstance(triggers, str):
+                    try:
+                        triggers = json.loads(triggers)
+                    except Exception:
+                        logger.error("triggers for automation %r is a string but could not be parsed: %r", automation_id, triggers)
+                        triggers = []
+                if not isinstance(triggers, (list, tuple)):
+                    logger.error("triggers for automation %r is not a list/tuple, got %r. Skipping.", automation_id, type(triggers))
+                    triggers = []
+
                 for trigger in triggers:
+                    if not isinstance(trigger, dict):
+                        logger.warning("Skipping trigger with unexpected type %s: %r", type(trigger).__name__, trigger)
+                        continue
+
                     queue_name = trigger.get('queue_name')
                     if queue_name and queue_name not in self.consumed_queues:
                         self.channel.queue_declare(queue=queue_name, durable=True)
 
-                        actions = self.config_manager.get_actions(automation.get('id'))
+                        actions = self.config_manager.get_actions(automation_id)
+
+                        # Defensive: normalize actions
+                        if isinstance(actions, str):
+                            try:
+                                actions = json.loads(actions)
+                            except Exception:
+                                logger.error("actions for automation %r is a string but could not be parsed: %r", automation_id, actions)
+                                actions = []
+                        if not isinstance(actions, (list, tuple)):
+                            logger.error("actions for automation %r is not a list/tuple, got %r. Skipping.", automation_id, type(actions))
+                            actions = []
+
                         target_queues = []
                         for action in actions:
+                            if not isinstance(action, dict):
+                                logger.warning("Skipping action with unexpected type %s: %r", type(action).__name__, action)
+                                continue
+
                             action_type = action.get('description')
                             if action_type == 'forward_to_rabbitmq':
                                 _target_queues = action.get('action_config', [])
-                                for target_queue in target_queues:
-                                    send_to = target_queue.get('sent_to')
-                                    if send_to and send_to not in self.consumed_queues:
-                                        # self.channel.queue_declare(queue=send_to, durable=True)
-                                        # self.consumed_queues.add(send_to)
-                                        logger.info(f"registering target queue: {send_to}")
-                                    target_queues.append(send_to)
+                                if not isinstance(_target_queues, (list, tuple)):
+                                    logger.warning("action_config for action is not a list/tuple, got %r", type(_target_queues))
+                                    _target_queues = []
 
-                        def make_callback(qname, __target_queues):
+                                for target_queue in _target_queues:
+                                    send_to = None
+                                    if isinstance(target_queue, dict):
+                                        send_to = target_queue.get('sent_to')
+                                    elif isinstance(target_queue, str):
+                                        # allow string shortcuts
+                                        send_to = target_queue
+
+                                    if send_to:
+                                        if send_to not in self.consumed_queues:
+                                            logger.info(f"registering target queue: {send_to}")
+                                        target_queues.append(send_to)
+
+                        def make_callback(qname, target_queues_param):
                             def callback(ch, method, properties, body):
                                 message = Message.from_json(body)
                                 logger.info(f"Mensagem recebida na fila '{qname}': {body}")
                                 self.route_to_next_queue(message)
-                                for _target_queue in __target_queues:
+                                for _target_queue in target_queues_param:
                                     logger.info(f"Roteando mensagem para fila: {_target_queue}")
                                     self.send_message(message, _target_queue)
                                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -258,6 +356,9 @@ class RabbitMQService:
             return
 
         _queue = self.queue_pool.get(message.index)
+        if _queue is None:
+            logger.error("No command queue registered for index %s, dropping message", message.index)
+            return
         _queue.put(message)
 
     def reconnect(self) -> bool:
