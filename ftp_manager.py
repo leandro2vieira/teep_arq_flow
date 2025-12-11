@@ -264,79 +264,143 @@ class FTPManager:
         if not self._ensure_connected():
             return []
         remote_dir = normalize_path(remote_dir or '.')
-        entries_lines: List[str] = []
-        using_mlsd = True
-        try:
-            # prefer MLSD
-            try:
-                self.ftp.retrlines(f"MLSD {remote_dir}", entries_lines.append)
-            except Exception:
-                entries_lines = []
-                using_mlsd = False
-                try:
-                    self.ftp.retrlines(f"LIST {remote_dir}", entries_lines.append)
-                except Exception:
-                    self.ftp.retrlines("LIST", entries_lines.append)
-        except Exception as e:
-            logger.error("list_remote retrieval error: %s", e)
-            return []
-
         results: List[Dict[str, Any]] = []
 
         def make_path(dir_path: str, name: str) -> str:
+            if name.startswith('/') or '/' in name:
+                return normalize_path(name)
             if dir_path in ('', '.', '/'):
                 base = '/' if dir_path == '/' else ''
                 return normalize_path(f"{base}{name}")
             return normalize_path(f"{dir_path.rstrip('/')}/{name}")
 
+        def normalize_entry(raw_name: str, dir_path: str):
+            raw = (raw_name or '').rstrip('/')
+            display = os.path.basename(raw) or raw
+            full = make_path(dir_path, raw) if raw and not raw.startswith('/') and '/' not in raw else normalize_path(raw)
+            return display, full
+
+        # regex para linhas do LIST no estilo Windows: "11-10-25  07:18AM       <DIR>          Name"
+        windows_list_re = re.compile(r'^\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}(?:AM|PM)\s+(?:<DIR>|\d+)\s+(.+)$', re.IGNORECASE)
+
         try:
-            if using_mlsd:
-                from datetime import datetime as _dt
-                for line in entries_lines:
-                    try:
-                        parts = line.split(';')
-                        facts = {}
-                        for fact in parts[:-1]:
-                            if '=' in fact:
-                                k, v = fact.split('=', 1)
-                                facts[k.lower()] = v
-                        name = parts[-1].strip()
-                        if not name or (not include_hidden and name.startswith('.')):
+            # 1) Try FTP.mlsd (preferred)
+            try:
+                if hasattr(self.ftp, 'mlsd'):
+                    for raw_name, facts in self.ftp.mlsd(remote_dir):
+                        if not raw_name or (not include_hidden and raw_name.startswith('.')):
                             continue
-                        typ = 'directory' if facts.get('type') == 'dir' else 'file'
-                        size = int(facts['size']) if 'size' in facts and facts['size'].isdigit() else None
+                        name, full_path = normalize_entry(raw_name, remote_dir)
+                        ftype = (facts.get('type') or '').lower()
+                        typ = 'directory' if ftype in ('dir', 'cdir', 'pdir') or ftype.startswith('d') else 'file'
+                        size = None
+                        if 'size' in facts:
+                            try:
+                                size = int(facts['size'])
+                            except Exception:
+                                size = None
                         mtime = None
                         if 'modify' in facts:
                             try:
-                                mtime = _dt.strptime(facts['modify'], '%Y%m%d%H%M%S').isoformat()
+                                mtime = datetime.strptime(facts['modify'], '%Y%m%d%H%M%S').isoformat()
                             except Exception:
                                 mtime = facts.get('modify')
-                        results.append({'name': name, 'path': make_path(remote_dir, name), 'type': typ, 'size': size, 'mtime': mtime})
-                    except Exception:
-                        continue
-            else:
-                for line in entries_lines:
+                        results.append({'name': name, 'path': full_path, 'type': typ, 'size': size, 'mtime': mtime})
+                if results:
+                    return results
+            except Exception:
+                pass
+
+            # 2) Try LIST and parse leniently
+            entries: List[str] = []
+            try:
+                self.ftp.retrlines(f"LIST {remote_dir}", entries.append)
+            except Exception:
+                try:
+                    self.ftp.retrlines("LIST", entries.append)
+                except Exception:
+                    entries = []
+
+            if entries:
+                for line in entries:
                     try:
                         parts = line.split()
-                        if len(parts) < 9:
-                            continue
-                        name = ' '.join(parts[8:])
-                        if not include_hidden and name.startswith('.'):
-                            continue
-                        typ = 'directory' if line.startswith('d') else 'file'
-                        size = None
-                        try:
-                            size = int(parts[4])
-                        except Exception:
-                            pass
-                        mtime = ' '.join(parts[5:8])
-                        results.append({'name': name, 'path': make_path(remote_dir, name), 'type': typ, 'size': size, 'mtime': mtime})
+                        if len(parts) >= 9:
+                            raw_name = ' '.join(parts[8:])
+                            if not raw_name or (not include_hidden and raw_name.startswith('.')):
+                                continue
+                            name, full_path = normalize_entry(raw_name, remote_dir)
+                            typ = 'directory' if line.startswith('d') else 'file'
+                            size = None
+                            try:
+                                size = int(parts[4])
+                            except Exception:
+                                size = None
+                            mtime = ' '.join(parts[5:8])
+                            results.append({'name': name, 'path': full_path, 'type': typ, 'size': size, 'mtime': mtime})
+                        else:
+                            # Detecta formato Windows LIST e extrai apenas o nome
+                            m = windows_list_re.match(line.strip())
+                            if m:
+                                raw_name = m.group(1).strip()
+                            else:
+                                raw_name = line.strip()
+                            if not raw_name or (not include_hidden and raw_name.startswith('.')):
+                                continue
+                            name, full_path = normalize_entry(raw_name, remote_dir)
+                            # probe to detect directory
+                            typ = 'file'
+                            try:
+                                self.ftp.cwd(full_path)
+                                typ = 'directory'
+                                try:
+                                    self.ftp.cwd(remote_dir)
+                                except Exception:
+                                    pass
+                            except Exception:
+                                typ = 'file'
+                            results.append({'name': name, 'path': full_path, 'type': typ, 'size': None, 'mtime': None})
                     except Exception:
                         continue
-        except Exception as e:
-            logger.exception("list_remote parse error: %s", e)
+                if results:
+                    return results
 
-        return results
+            # 3) Final fallback: NLST and probes
+            try:
+                names = self.ftp.nlst(remote_dir)
+            except Exception:
+                try:
+                    names = self.ftp.nlst()
+                except Exception:
+                    names = []
+
+            for n in names:
+                if not n:
+                    continue
+                name, full = normalize_entry(n, remote_dir)
+                if not name or (not include_hidden and name.startswith('.')):
+                    continue
+                typ = 'file'
+                try:
+                    self.ftp.cwd(full)
+                    typ = 'directory'
+                    try:
+                        self.ftp.cwd(remote_dir)
+                    except Exception:
+                        pass
+                except Exception:
+                    typ = 'file'
+                size = None
+                try:
+                    size = int(self.ftp.size(full))
+                except Exception:
+                    size = None
+                results.append({'name': name, 'path': full, 'type': typ, 'size': size, 'mtime': None})
+
+            return results
+        except Exception as e:
+            logger.exception("list_remote error: %s", e)
+            return []
 
     def _download_recursive(self, remote_dir: str, local_dir: str) -> bool:
         remote_dir = normalize_path(remote_dir or '.')
