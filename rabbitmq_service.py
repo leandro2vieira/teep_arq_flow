@@ -122,6 +122,8 @@ class RabbitMQService:
                 logger.warning("Skipping peripheral with unexpected type %s: %r", type(peripheral).__name__, peripheral)
                 continue
 
+            logger.info(f"Processing peripheral: {peripheral}")
+
             json_channel_to_virtual_index = peripheral.get('json_channel_to_virtual_index', {})
             json_connection_params = peripheral.get('json_connection_params', {})
 
