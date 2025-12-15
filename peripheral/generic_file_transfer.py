@@ -363,7 +363,7 @@ class GenericFileTransfer:
 
                 # if there were upload errors, still attempt verification but mark upload_result accordingly
                 upload_result = {'success': len(upload_errors) == 0, 'errors': upload_errors}
-                self._send(ActionTable.STREAM_DIRECTORY.value, upload_result)
+                self._send(ActionTable.FINISH_STREAM_FILE.value, upload_result)
 
                 # perform verification as before
                 # build local file map: relative_path -> size
