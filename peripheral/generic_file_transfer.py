@@ -521,7 +521,11 @@ class GenericFileTransfer:
             self._send(ActionTable.START_DOWNLOAD_FILE.value)
             remote_dir = _join_path(self.io.remote_side_path, remote_path)
             timestamp = datetime.now().strftime("%H%M%S_%d%m%Y")
-            local_dir = _join_path(self.io.server_side_path, local_path + f"_download_{timestamp}")
+            # Remove barras e backslashes para ficar apenas um nome
+            base_name = (local_path or '').replace('/', '').replace('\\', '').strip()
+            if not base_name:
+                base_name = 'download'
+            local_dir = _join_path(self.io.server_side_path, f"download_{timestamp}_{base_name}")
             logger.info(f"Downloading directory from {remote_dir} to {local_dir}")
 
             # perform download
