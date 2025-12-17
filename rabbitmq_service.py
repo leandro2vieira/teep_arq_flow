@@ -25,6 +25,36 @@ def consume_queue(q: Queue, business_callback):
 
         business_callback(command)
 
+def body_to_dict(body) -> dict | None:
+    """Converte `body` (bytes ou str) para dict JSON. Retorna None se falhar."""
+    if isinstance(body, bytes):
+        try:
+            text = body.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                text = body.decode('latin-1')
+            except Exception:
+                logger.exception("Falha ao decodificar bytes do body")
+                return None
+    elif isinstance(body, str):
+        text = body
+    else:
+        logger.error("Tipo de body inesperado: %r", type(body))
+        return None
+
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # tenta lidar com JSON dupla\-codificado (string contendo JSON)
+        if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+            try:
+                return json.loads(text[1:-1])
+            except Exception:
+                pass
+        logger.exception("Não foi possível converter body para JSON")
+        return None
+
 class RabbitMQService:
     """Serviço de integração com RabbitMQ"""
 
@@ -206,12 +236,14 @@ class RabbitMQService:
                         logger.warning("Skipping trigger with unexpected type %s: %r", type(trigger).__name__, trigger)
                         continue
 
+                    logger.info(f"Processing trigger: {trigger}")
                     queue_name = trigger.get('queue_name')
                     if queue_name and queue_name not in self.consumed_queues:
                         self.channel.queue_declare(queue=queue_name, durable=True)
 
                         actions = self.config_manager.get_actions(automation_id)
 
+                        logger.info(f"Actions: {actions}")
                         # Defensive: normalize actions
                         if isinstance(actions, str):
                             try:
@@ -229,7 +261,10 @@ class RabbitMQService:
                                 logger.warning("Skipping action with unexpected type %s: %r", type(action).__name__, action)
                                 continue
 
+                            logger.info(f"Processing action: {action}")
+
                             action_type = action.get('description')
+                            logger.info(f"Processing action: {action_type}")
                             if action_type == 'forward_to_rabbitmq':
                                 _target_queues = action.get('action_config', [])
                                 if not isinstance(_target_queues, (list, tuple)):
@@ -238,25 +273,32 @@ class RabbitMQService:
 
                                 for target_queue in _target_queues:
                                     send_to = None
-                                    if isinstance(target_queue, dict):
-                                        send_to = target_queue.get('sent_to')
-                                    elif isinstance(target_queue, str):
-                                        # allow string shortcuts
-                                        send_to = target_queue
-
-                                    if send_to:
+                                    logger.info(f"Processing target queue: {target_queue}, {type(target_queue)}")
+                                    try:
+                                        index_to = target_queue['index']
+                                        send_to = target_queue['send_to']
+                                    except Exception as e:
+                                        logger.error(f"Erro ao processar target_queue: {e}")
+                                    logger.info(f"send to: {send_to}")
+                                    if send_to and index_to:
                                         if send_to not in self.consumed_queues:
-                                            logger.info(f"registering target queue: {send_to}")
-                                        target_queues.append(send_to)
+                                            logger.info(f"-------------- registering target queue: {send_to}")
+                                        target_queues.append(target_queue)
 
                         def make_callback(qname, target_queues_param):
                             def callback(ch, method, properties, body):
-                                message = Message.from_json(body)
+                                message = body_to_dict(body)
                                 logger.info(f"Mensagem recebida na fila '{qname}': {body}")
-                                self.route_to_next_queue(message)
-                                for _target_queue in target_queues_param:
-                                    logger.info(f"Roteando mensagem para fila: {_target_queue}")
-                                    self.send_message(message, _target_queue)
+                                # self.route_to_next_queue(message)
+                                for tqueue in target_queues_param:
+                                    logger.info(f"Roteando mensagem para fila: {tqueue}")
+                                    send_to = tqueue["send_to"] if isinstance(tqueue, dict) else tqueue
+
+                                    # substitui o `index` dentro do dict `message` pelo index do target queue, se aplicável
+                                    if isinstance(message, dict) and isinstance(tqueue, dict) and "index" in tqueue:
+                                        message["data"]["index"] = tqueue["index"]
+
+                                    self.send_message(message, send_to)
                                 ch.basic_ack(delivery_tag=method.delivery_tag)
                             return callback
 
@@ -353,6 +395,7 @@ class RabbitMQService:
 
     def route_to_next_queue(self, message: Message):
         """Roteia a mensagem para a próxima fila apropriada"""
+        logger.info(f"Roteando mensagem: {str(message.to_dict())}")
         if message.index is None:
             logger.error("Mensagem recebida sem índice, não é possível rotear")
             return
