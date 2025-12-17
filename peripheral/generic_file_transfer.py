@@ -520,7 +520,8 @@ class GenericFileTransfer:
         def op():
             self._send(ActionTable.START_DOWNLOAD_FILE.value)
             remote_dir = _join_path(self.io.remote_side_path, remote_path)
-            local_dir = _join_path(self.io.server_side_path, local_path)
+            timestamp = datetime.now().strftime("%H%M%S_%d%m%Y")
+            local_dir = _join_path(self.io.server_side_path, local_path + f"_download_{timestamp}")
             logger.info(f"Downloading directory from {remote_dir} to {local_dir}")
 
             # perform download
@@ -640,7 +641,7 @@ class GenericFileTransfer:
                 return {'success': success}
             return success
 
-        remote_path = _join_path(self.io.local_path, remote_path)
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
         return self._with_ftp(op)
 
     def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
@@ -650,7 +651,7 @@ class GenericFileTransfer:
                 return {'success': success}
             return success
 
-        remote_path = _join_path(self.io.local_path, remote_path)
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
         return self._with_ftp(op)
 
     def _handle_list_directory(self, remote_path: str) -> List:
