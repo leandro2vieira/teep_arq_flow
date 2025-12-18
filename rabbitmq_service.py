@@ -340,6 +340,7 @@ class RabbitMQService:
                                         # substitui o `index` dentro do dict `message` pelo index do target queue, se aplicável
                                         if isinstance(message, dict) and isinstance(tqueue, dict) and "index" in tqueue:
                                             message["data"]["index"] = tqueue["index"]
+                                        logger.info(f"Roteando para: {send_to}: {message}")
                                         self.send_message(message, send_to)
 
                                     ch.basic_ack(delivery_tag=method.delivery_tag)
