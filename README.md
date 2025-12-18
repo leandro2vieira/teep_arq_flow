@@ -48,6 +48,7 @@ Ações de alto nível suportadas:
 | `STREAM_DIRECTORY`        | 65 | Comando para enviar diretório local ao FTP remoto                                              |
 | `DOWNLOAD_DIRECTORY`      | 66 | Comando para baixar diretório do FTP remoto para o servidor local                              |
 | `PROGRESS_SEND_FILE`      | 67 | Indica o progresso de envio de arquivos `value`                                                |
+| `LIST_PERIPHERALS`        | 68 | Lista periféricos                                                               |
 
 ## Modos de uso:
 
@@ -129,6 +130,7 @@ Listar arquivos do servidor FTP remoto
 ```
 Fazer upload de pasta local para o servidor FTP remoto
 - Enviar o seguinte JSON para a fila recv_queue_index_$ RabbitMQ:
+- O "extra" é opcional, funciona apenas para automation, forca enviar para apenas um redirecionamento 
 ```json
 {
   "action": 65, 
@@ -137,6 +139,11 @@ Fazer upload de pasta local para o servidor FTP remoto
     "value": {
       "local_path": "/program5/", 
       "remote_path": "/"
+    },
+    "extra": {
+      "index": 3, 
+      "name": "Robo3", 
+      "send_to": "send_queue_index_3"
     }
   }
 }
@@ -154,6 +161,7 @@ Fazer upload de pasta local para o servidor FTP remoto
 ```
 Fazer download de pasta do servidor FTP remoto para o local
 - Enviar o seguinte JSON para a fila recv_queue_index_$ RabbitMQ:
+- O "extra" é opcional, funciona apenas para automation, forca enviar para apenas um redirecionamento
 ```json
 {
   "action": 66, 
@@ -162,6 +170,11 @@ Fazer download de pasta do servidor FTP remoto para o local
     "value": {
       "local_path": "/program5/", 
       "remote_path": "/"
+    },
+    "extra": {
+      "index": 3, 
+      "name": "Robo3", 
+      "send_to": "send_queue_index_3"
     }
   }
 }
@@ -179,6 +192,7 @@ Fazer download de pasta do servidor FTP remoto para o local
 ```
 Deletar pasta remoto no servidor FTP
 - Enviar o seguinte JSON para a fila recv_queue_index_$ RabbitMQ:
+- O "extra" é opcional, funciona apenas para automation, forca enviar para apenas um redirecionamento
 ```json
 {
   "action": 64, 
@@ -186,6 +200,11 @@ Deletar pasta remoto no servidor FTP
     "index": $, 
     "value": {
       "remote_path": "/"
+    },
+    "extra": {
+      "index": 3, 
+      "name": "Robo3", 
+      "send_to": "send_queue_index_3"
     }
   }
 }
@@ -205,6 +224,7 @@ Deletar pasta remoto no servidor FTP
 ```
 Enviar arquivo local para o servidor FTP remoto
 - Enviar o seguinte JSON para a fila recv_queue_index_$ RabbitMQ:
+- O "extra" é opcional, funciona apenas para automation, forca enviar para apenas um redirecionamento
 ```json
 {
   "action": 35, 
@@ -213,6 +233,11 @@ Enviar arquivo local para o servidor FTP remoto
     "value": {
       "local_path": "/program5/job1.txt", 
       "remote_path": "/"
+    },
+    "extra": {
+      "index": 3, 
+      "name": "Robo3", 
+      "send_to": "send_queue_index_3"
     }
   }
 }
@@ -230,6 +255,7 @@ Enviar arquivo local para o servidor FTP remoto
 ```
 Fazer download de arquivo do servidor FTP remoto para o local
 - Enviar o seguinte JSON para a fila recv_queue_index_$ RabbitMQ:
+- O "extra" é opcional, funciona apenas para automation, forca enviar para apenas um redirecionamento
 ```json
 {
   "action": 63, 
@@ -238,6 +264,11 @@ Fazer download de arquivo do servidor FTP remoto para o local
     "value": {
       "local_path": "/program5/", 
       "remote_path": "/job1.txt"
+    },
+    "extra": {
+      "index": 3, 
+      "name": "Robo3", 
+      "send_to": "send_queue_index_3"
     }
   }
 }
@@ -282,9 +313,44 @@ Progresso no envio de arquivo ou diretório:
           "file": "program.txt", 
           "bytes_sent": 4096, 
           "total_bytes": 4096, 
-          "percent": 100
+          "percent": 100 
         },
         "timestamp": 1762873063
     }
+}
+```
+- Listar actions in automation
+```json
+{
+  "action": 68, 
+  "data": {
+    "index": $, 
+    "value": "", 
+    "timestamp": 1762463711
+  }
+}
+```
+- A resposta será:
+```json
+{
+  "action": "68", 
+  "data": {
+    "index": $,
+    "value": [
+      {
+        "index": 1, 
+        "name": "Robo1", 
+        "send_to": "send_queue_index_1"
+      }, {
+        "index": 2, 
+        "name": "Robo2", 
+        "send_to": "send_queue_index_2"
+      }, {
+        "index": 3, 
+        "name": "Robo3", 
+        "send_to": "send_queue_index_3"
+      }
+    ]
+  }
 }
 ```

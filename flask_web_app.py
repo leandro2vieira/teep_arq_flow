@@ -121,7 +121,7 @@ class FlaskWebApp:
             data = request.get_json() or {}
             name = data.get('name')
             if not name:
-                return jsonify({'error': 'Field \"name\" is required'}), 400
+                return jsonify({'error': 'Field "name" is required'}), 400
             try:
                 pid = self.config_manager.create_peripheral(
                     name=name,
@@ -275,6 +275,71 @@ class FlaskWebApp:
                     queue_name=queue_name
                 )
                 return jsonify({'message': 'Trigger updated'})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 400
+
+        # ========== Result routes ==========
+        @self.app.route('/api/results', methods=['GET'])
+        def get_results():
+            automation_id = request.args.get('automation_id', type=int)
+            results = self.config_manager.get_results(automation_id=automation_id)
+            return jsonify(results)
+
+        @self.app.route('/api/results/<int:result_id>', methods=['GET'])
+        def get_result(result_id):
+            result = self.config_manager.get_result(result_id)
+            if result:
+                return jsonify(result)
+            return jsonify({'error': 'Result not found'}), 404
+
+        @self.app.route('/api/results', methods=['POST'])
+        def create_result():
+            data = request.get_json() or {}
+            automation_id = data.get('automation_id')
+            # support both new (description, queue_name) and old (result_type, result_config)
+            description = data.get('description') or data.get('result_type')
+            queue_name = data.get('queue_name')
+            result_config = data.get('result_config') if 'result_config' in data else data.get('result_extra_config') if 'result_extra_config' in data else None
+            if not queue_name:
+                # fallback: if result_config is a plain string, treat it as queue_name
+                rcfg = data.get('result_config')
+                if isinstance(rcfg, str) and rcfg.strip():
+                    queue_name = rcfg.strip()
+            if not automation_id or not queue_name:
+                return jsonify({'error': 'Fields "automation_id" and "queue_name" are required'}), 400
+            try:
+                rid = self.config_manager.create_result(
+                    automation_id=automation_id,
+                    description=description or '',
+                    queue_name=queue_name,
+                    result_config=result_config
+                )
+                return jsonify({'id': rid, 'message': 'Result created'}), 201
+            except Exception as e:
+                return jsonify({'error': str(e)}), 400
+
+        @self.app.route('/api/results/<int:result_id>', methods=['PUT'])
+        def update_result(result_id):
+            data = request.get_json() or {}
+            description = data.get('description') if 'description' in data else data.get('result_type')
+            queue_name = data.get('queue_name') if 'queue_name' in data else data.get('result_config')
+            result_config = data.get('result_config') if 'result_config' in data else None
+            try:
+                self.config_manager.update_result(
+                    result_id=result_id,
+                    description=description,
+                    queue_name=queue_name,
+                    result_config=result_config
+                )
+                return jsonify({'message': 'Result updated'})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 400
+
+        @self.app.route('/api/results/<int:result_id>', methods=['DELETE'])
+        def delete_result(result_id):
+            try:
+                self.config_manager.delete_result(result_id)
+                return jsonify({'message': 'Result deleted'})
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
 

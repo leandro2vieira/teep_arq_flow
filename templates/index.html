@@ -477,6 +477,13 @@
           <div id="actions-list" style="margin-top:10px"></div>
         </div>
 
+        <!-- Results section: similar to Triggers/Actions -->
+        <div style="margin-top:20px">
+          <h3 style="color:var(--accent-2);margin-bottom:10px">Results</h3>
+          <button type="button" class="btn" onclick="openResultModal()">➕ Adicionar Result</button>
+          <div id="results-list" style="margin-top:10px"></div>
+        </div>
+
         <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
           <button type="submit" class="btn primary">💾 Salvar</button>
           <button type="button" class="btn" onclick="closeAutomationModal()">✖ Cancelar</button>
@@ -541,6 +548,37 @@
         <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
           <button type="submit" class="btn primary">💾 Salvar</button>
           <button type="button" class="btn" onclick="closeActionModal()">✖ Cancelar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Result Modal (new) -->
+  <div id="resultModal" class="modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <h2 id="resultModalTitle">Novo Result</h2>
+      <form id="resultForm" onsubmit="saveResult(event)" novalidate>
+        <input type="hidden" id="resultId" />
+        <input type="hidden" id="resultAutomationId" />
+
+        <div class="form-group">
+          <label>Descrição *</label>
+          <input type="text" id="resultDescription" required placeholder="Descrição do result">
+        </div>
+
+        <div class="form-group">
+          <label>Fila (queue_name) *</label>
+          <input type="text" id="resultQueueName" required placeholder="Nome da fila RabbitMQ">
+        </div>
+
+        <div class="form-group">
+          <label>Configuração adicional (JSON, opcional)</label>
+          <textarea id="resultExtraConfig" rows="4" placeholder='{"key":"value"}'></textarea>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+          <button type="submit" class="btn primary">💾 Salvar</button>
+          <button type="button" class="btn" onclick="closeResultModal()">✖ Cancelar</button>
         </div>
       </form>
     </div>
@@ -1097,17 +1135,22 @@ async function loadAutomations() {
       return;
     }
 
-    let html = '<table><thead><tr><th>ID</th><th>Nome</th><th>Triggers</th><th>Ações</th><th>Criado em</th><th>Ações</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>ID</th><th>Nome</th><th>Triggers</th><th>Ações</th><th>Results</th><th>Criado em</th><th>Ações</th></tr></thead><tbody>';
 
     for (const auto of automations) {
-      const triggers = await fetch(`/api/triggers?automation_id=${auto.id}`).then(r => r.json()).catch(() => []);
-      const actions = await fetch(`/api/actions?automation_id=${auto.id}`).then(r => r.json()).catch(() => []);
+      // fetch triggers/actions/results counts in parallel for each automation
+      const [triggers, actions, results] = await Promise.all([
+        fetch(`/api/triggers?automation_id=${auto.id}`).then(r => r.json()).catch(() => []),
+        fetch(`/api/actions?automation_id=${auto.id}`).then(r => r.json()).catch(() => []),
+        fetch(`/api/results?automation_id=${auto.id}`).then(r => r.json()).catch(() => [])
+      ]);
 
       html += `<tr>
         <td>${auto.id}</td>
         <td>${escapeHtml(auto.name)}</td>
-        <td>${triggers.length}</td>
-        <td>${actions.length}</td>
+        <td>${(triggers && triggers.length) || 0}</td>
+        <td>${(actions && actions.length) || 0}</td>
+        <td>${(results && results.length) || 0}</td>
         <td>${auto.created_at || 'N/A'}</td>
         <td style="text-align:right">
           <div class="actions">
@@ -1132,6 +1175,7 @@ function openAutomationModal() {
   document.getElementById('automationName').value = '';
   document.getElementById('triggers-list').innerHTML = '';
   document.getElementById('actions-list').innerHTML = '';
+  document.getElementById('results-list').innerHTML = '';
   document.getElementById('automationModal').classList.add('active');
 }
 
@@ -1148,9 +1192,10 @@ async function editAutomation(id) {
     document.getElementById('automationId').value = auto.id;
     document.getElementById('automationName').value = auto.name || '';
 
-    // Load triggers and actions
+    // Load triggers, actions and results
     await loadTriggersForAutomation(auto.id);
     await loadActionsForAutomation(auto.id);
+    await loadResultsForAutomation(auto.id);
 
     document.getElementById('automationModal').classList.add('active');
   } catch (e) {
@@ -1442,6 +1487,127 @@ async function saveAction(e) {
   } catch (e) {
     console.error(e);
     showAlert('error', 'Erro ao salvar action');
+  }
+}
+
+// ==================== RESULT FUNCTIONS ====================
+
+async function loadResultsForAutomation(automationId) {
+  try {
+    const res = await fetch(`/api/results?automation_id=${automationId}`);
+    const results = await res.json();
+    const list = document.getElementById('results-list');
+
+    if (!results || results.length === 0) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:0.9rem;padding:8px">Nenhum result cadastrado</div>';
+      return;
+    }
+
+    let html = '<table style="font-size:0.9rem"><thead><tr><th>ID</th><th>Descrição</th><th>Fila</th><th>Config</th><th>Ações</th></tr></thead><tbody>';
+
+    for (const result of results) {
+      html += `<tr>
+        <td>${result.id}</td>
+        <td>${escapeHtml(result.description||'')}</td>
+        <td>${escapeHtml(result.queue_name||'')}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(JSON.stringify(result.result_config || {}))}</td>
+        <td style="text-align:right">
+          <div class="actions">
+            <button class="btn" style="padding:4px 8px;font-size:0.85rem" onclick="editResult(${result.id})">Editar</button>
+            <button class="btn" style="padding:4px 8px;font-size:0.85rem" onclick="deleteResult(${result.id})">Deletar</button>
+          </div>
+        </td>
+      </tr>`;
+    }
+
+    html += '</tbody></table>';
+    list.innerHTML = html;
+  } catch (e) {
+    console.error(e);
+    document.getElementById('results-list').innerHTML = '<div style="color:red">Erro ao carregar results</div>';
+  }
+}
+
+function openResultModal() {
+  const automationId = document.getElementById('automationId').value;
+  if (!automationId) {
+    showAlert('error', 'Salve a automação primeiro');
+    return;
+  }
+
+  document.getElementById('resultModalTitle').textContent = 'Novo Result';
+  document.getElementById('resultId').value = '';
+  document.getElementById('resultAutomationId').value = automationId;
+  document.getElementById('resultDescription').value = '';
+  document.getElementById('resultQueueName').value = '';
+  document.getElementById('resultExtraConfig').value = '';
+  document.getElementById('resultModal').classList.add('active');
+}
+
+function closeResultModal() { document.getElementById('resultModal').classList.remove('active'); }
+
+async function editResult(id) {
+  try {
+    const res = await fetch(`/api/results/${id}`);
+    const result = await res.json();
+
+    document.getElementById('resultModalTitle').textContent = 'Editar Result';
+    document.getElementById('resultId').value = result.id;
+    document.getElementById('resultAutomationId').value = result.automation_id || '';
+    document.getElementById('resultDescription').value = result.description || '';
+    document.getElementById('resultQueueName').value = result.queue_name || '';
+    try { document.getElementById('resultExtraConfig').value = JSON.stringify(result.result_config || {}, null, 2); } catch(e){ document.getElementById('resultExtraConfig').value = '' }
+
+    document.getElementById('resultModal').classList.add('active');
+  } catch (e) {
+    console.error(e);
+    showAlert('error', 'Erro ao carregar result');
+  }
+}
+
+async function saveResult(e) {
+  e.preventDefault();
+  const id = document.getElementById('resultId').value;
+  const automationId = document.getElementById('resultAutomationId').value;
+  const description = document.getElementById('resultDescription').value;
+  const queueName = document.getElementById('resultQueueName').value;
+  const extra = parseJsonField('resultExtraConfig');
+
+  if (!automationId || !queueName) return showAlert('error','Automation ID e Queue são obrigatórios');
+
+  const payload = {
+    automation_id: Number(automationId),
+    description: description,
+    queue_name: queueName
+  };
+  if (extra !== null) payload.result_config = extra; // keep legacy-like field if needed
+
+  try{
+    const url = id ? `/api/results/${id}` : '/api/results';
+    const method = id ? 'PUT' : 'POST';
+    const res = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(res.ok){ closeResultModal(); loadResultsForAutomation(automationId); showAlert('success', id ? 'Result atualizado' : 'Result criado'); }
+    else { const err = await res.json().catch(()=>({})); showAlert('error', err.error || 'Erro ao salvar result'); }
+  } catch(e){ console.error(e); showAlert('error','Erro ao salvar result'); }
+}
+
+async function deleteResult(id) {
+  if (!confirm('Deseja deletar este result?')) return;
+
+  try {
+    const res = await fetch(`/api/results/${id}`, { method: 'DELETE' });
+    const body = await res.json().catch(()=>({}));
+
+    if (res.ok) {
+      showAlert('success', body.message || 'Result deletado');
+      const automationId = document.getElementById('automationId').value;
+      if (automationId) loadResultsForAutomation(automationId);
+    } else {
+      showAlert('error', body.error || 'Erro ao deletar');
+    }
+  } catch (e) {
+    console.error(e);
+    showAlert('error', 'Erro ao deletar result');
   }
 }
 </script>

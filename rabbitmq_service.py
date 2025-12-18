@@ -219,6 +219,7 @@ class RabbitMQService:
                 logger.info(f"Processing automation: {automation}")
                 automation_id = automation.get('id')
                 triggers = self.config_manager.get_triggers(automation_id)
+                results = self.config_manager.get_results(automation_id)
 
                 # Defensive: normalize triggers if needed
                 if isinstance(triggers, str):
@@ -281,33 +282,85 @@ class RabbitMQService:
                                         logger.error(f"Erro ao processar target_queue: {e}")
                                     logger.info(f"send to: {send_to}")
                                     if send_to and index_to:
-                                        if send_to not in self.consumed_queues:
-                                            logger.info(f"-------------- registering target queue: {send_to}")
                                         target_queues.append(target_queue)
+                                        self.channel.queue_declare(queue=send_to, durable=True)
+                            elif action_type == 'forward_to_single_rabbitmq':
+                                send_to = action.get('action_config', {}).get('send_to')
+                                if send_to:
+                                    target_queues.append(send_to)
 
                         def make_callback(qname, target_queues_param):
                             def callback(ch, method, properties, body):
                                 message = body_to_dict(body)
-                                logger.info(f"Mensagem recebida na fila '{qname}': {body}")
-                                # self.route_to_next_queue(message)
-                                for tqueue in target_queues_param:
-                                    logger.info(f"Roteando mensagem para fila: {tqueue}")
-                                    send_to = tqueue["send_to"] if isinstance(tqueue, dict) else tqueue
+                                logger.info(f"Mensagem recebida na fila '{qname}': {message}")
 
-                                    # substitui o `index` dentro do dict `message` pelo index do target queue, se aplicável
-                                    if isinstance(message, dict) and isinstance(tqueue, dict) and "index" in tqueue:
-                                        message["data"]["index"] = tqueue["index"]
+                                if not isinstance(message, dict):
+                                    logger.error("Body não é um JSON válido/dicionário, descartando")
+                                    try:
+                                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                                    except Exception:
+                                        pass
+                                    return
 
-                                    self.send_message(message, send_to)
-                                ch.basic_ack(delivery_tag=method.delivery_tag)
+                                try:
+                                    action = str(message.get("action"))
+                                    data = message.get("data", {})
+
+                                    if action == "68":
+                                        result = {
+                                            "action": "68",
+                                            "data": {
+                                                "index": data.get('index'),
+                                                "value": target_queues_param
+                                            }
+                                        }
+                                        queue = f"recv_queue_index_{data.get('index')}"
+                                        self.send_message(result, queue)
+                                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                                        return
+
+                                    # caminho para alvo único via extra.send_to
+                                    extras = data.get("extra", {})
+                                    if isinstance(extras, dict) and "send_to" in extras:
+                                        logger.info(f"Roteando mensagem para fila alvo única: {extras['send_to']}")
+                                        send_to = extras["send_to"]
+                                        # usa index vindo dos extras se disponível
+                                        if "index" in extras and isinstance(extras["index"], (int, str)):
+                                            data["index"] = extras["index"]
+                                            message["data"] = data
+                                        self.send_message(message, send_to)
+                                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                                        return
+
+                                    # rota para múltiplos targets
+                                    logger.info(f"Roteando mensagem para filas alvo: {target_queues_param}")
+                                    for tqueue in target_queues_param:
+                                        logger.info(f"Roteando mensagem para fila: {tqueue}")
+                                        send_to = tqueue["send_to"] if isinstance(tqueue, dict) else tqueue
+                                        # substitui o `index` dentro do dict `message` pelo index do target queue, se aplicável
+                                        if isinstance(message, dict) and isinstance(tqueue, dict) and "index" in tqueue:
+                                            message["data"]["index"] = tqueue["index"]
+                                        self.send_message(message, send_to)
+
+                                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                                except Exception:
+                                    logger.exception("Erro ao processar mensagem no callback")
+                                    try:
+                                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                                    except Exception:
+                                        pass
+
                             return callback
 
+                        self.channel.queue_declare(queue=queue_name, durable=True)
                         self.channel.basic_consume(
                             queue=queue_name,
                             on_message_callback=make_callback(queue_name, target_queues)
                         )
                         self.consumed_queues.add(queue_name)
                         logger.info(f"consuming queue: {queue_name}")
+                    else:
+                        logger.warning(f"Queue name missing or already consumed for trigger: {trigger} - {self.consumed_queues}")
         except Exception as e:
             logger.error(f"Erro ao declarar filas de automação: {e}")
 

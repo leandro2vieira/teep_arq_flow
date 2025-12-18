@@ -147,6 +147,34 @@ class ConfigManager:
                        )
                        ''')
 
+        # --- Nova definição da tabela de results ---
+        # Semelhante ao trigger: id, automation_id, description, queue_name, result_config, created_at
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS result
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           automation_id
+                           INTEGER
+                           NOT
+                           NULL,
+                           description
+                           TEXT,
+                           queue_name
+                           TEXT,
+                           result_config
+                           TEXT,
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           FOREIGN KEY (automation_id) REFERENCES automation(id) ON DELETE CASCADE
+                       )
+                       ''')
+
         # --- Nova definição da tabela de actions ---
         # Agora: id, automation_id, description, action_config (JSON/text), created_at
         cursor.execute('''
@@ -173,7 +201,7 @@ class ConfigManager:
                        )
                        ''')
 
-        # --- Migration checks ---, handle existing legacy schemas for trigger and action
+        # --- Migration checks ---, handle existing legacy schemas for trigger, result and action
         def _get_columns(table_name: str):
             cursor.execute(f"PRAGMA table_info('{table_name}')")
             return [r[1] for r in cursor.fetchall()]
@@ -211,6 +239,41 @@ class ConfigManager:
                 cursor.execute('DROP TABLE trigger_old')
         except Exception:
             # if trigger_old doesn't exist or other issues, ignore and continue
+            pass
+
+        # Migrate result table if it has legacy columns
+        try:
+            res_cols = _get_columns('result')
+            expected_res = {'id', 'automation_id', 'description', 'queue_name', 'result_config', 'created_at'}
+            if set(res_cols) != expected_res:
+                # perform migration: rename old, create new, copy data best-effort
+                cursor.execute('ALTER TABLE result RENAME TO result_old')
+                cursor.execute('''
+                    CREATE TABLE result
+                    (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        automation_id INTEGER NOT NULL,
+                        description TEXT,
+                        queue_name TEXT,
+                        result_config TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (automation_id) REFERENCES automation(id) ON DELETE CASCADE
+                    )
+                ''')
+                # Best-effort copy: map existing result_type -> description, result_config -> result_config (if text)
+                cursor.execute("SELECT id, automation_id, result_type, result_config, created_at FROM result_old")
+                rows = cursor.fetchall()
+                for r in rows:
+                    _id, _aid, _r_type, _r_cfg, _created = r
+                    desc = _r_type if _r_type is not None else ''
+                    rcfg = None
+                    if isinstance(_r_cfg, str):
+                        rcfg = _r_cfg
+                    # insert preserving id and created_at when possible
+                    cursor.execute('INSERT INTO result (id, automation_id, description, queue_name, result_config, created_at) VALUES (?,?,?,?,?,?)',
+                                   (_id, _aid, desc, None, rcfg, _created))
+                cursor.execute('DROP TABLE result_old')
+        except Exception:
             pass
 
         # Migrate action table if it has legacy columns
@@ -309,6 +372,7 @@ class ConfigManager:
         cursor.execute('DELETE FROM operation_history WHERE id = ?', (op_id,))
         conn.commit()
         conn.close()
+        logger.info(f"Operação id={op_id} deletada")
 
     def get_peripherals(self) -> List[Dict]:
         """Return all peripherals"""
@@ -562,6 +626,103 @@ class ConfigManager:
         conn.commit()
         conn.close()
         logger.info(f"Trigger id={trigger_id} deleted")
+
+    # ========== CRUD para Result ==========
+
+    def get_results(self, automation_id: Optional[int] = None) -> List[Dict]:
+        """Return all results, optionally filtered by automation_id"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if automation_id is not None:
+            cursor.execute('SELECT id, automation_id, description, queue_name, result_config, created_at FROM result WHERE automation_id = ? ORDER BY id', (automation_id,))
+        else:
+            cursor.execute('SELECT id, automation_id, description, queue_name, result_config, created_at FROM result ORDER BY automation_id, id')
+        results = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        # parse JSON fields in result_config
+        for r in results:
+            if r.get('result_config'):
+                try:
+                    r['result_config'] = json.loads(r['result_config'])
+                except Exception:
+                    pass
+        return results
+
+    def get_result(self, result_id: int) -> Optional[Dict]:
+        """Return a single result by id"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, automation_id, description, queue_name, result_config, created_at FROM result WHERE id = ?', (result_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        result = dict(row)
+        if result.get('result_config'):
+            try:
+                result['result_config'] = json.loads(result['result_config'])
+            except Exception:
+                pass
+        return result
+
+    def create_result(self,
+                     automation_id: int,
+                     description: str = '',
+                     queue_name: Optional[str] = None,
+                     result_config: Any = None) -> int:
+        """Create a new result and return its id"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        r_config = json.dumps(result_config) if result_config is not None and not isinstance(result_config, str) else result_config
+        cursor.execute('''
+                       INSERT INTO result (automation_id, description, queue_name, result_config)
+                       VALUES (?, ?, ?, ?)
+                       ''', (automation_id, description, queue_name, r_config))
+        rid = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        logger.info(f"Result created (id={rid}) for automation_id={automation_id}")
+        return rid
+
+    def update_result(self,
+                     result_id: int,
+                     description: Optional[str] = None,
+                     queue_name: Optional[str] = None,
+                     result_config: Any = None):
+        """Update an existing result"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        fields = []
+        params = []
+        if description is not None:
+            fields.append("description = ?")
+            params.append(description)
+        if queue_name is not None:
+            fields.append("queue_name = ?")
+            params.append(queue_name)
+        if result_config is not None:
+            r_config = json.dumps(result_config) if not isinstance(result_config, str) else result_config
+            fields.append("result_config = ?")
+            params.append(r_config)
+
+        if fields:
+            sql = f"UPDATE result SET {', '.join(fields)} WHERE id = ?"
+            params.append(result_id)
+            cursor.execute(sql, tuple(params))
+            conn.commit()
+        conn.close()
+        logger.info(f"Result id={result_id} updated")
+
+    def delete_result(self, result_id: int):
+        """Delete a result"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM result WHERE id = ?', (result_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Result id={result_id} deleted")
 
     # ========== CRUD para Action ==========
 
