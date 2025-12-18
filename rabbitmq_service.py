@@ -306,6 +306,9 @@ class RabbitMQService:
                                     action = str(message.get("action"))
                                     data = message.get("data", {})
 
+                                    # caminho para alvo único via extra.send_to
+                                    extras = data.get("extra", {})
+
                                     if action == "68":
                                         result = {
                                             "action": "68",
@@ -316,12 +319,7 @@ class RabbitMQService:
                                         }
                                         queue = f"recv_queue_index_{data.get('index')}"
                                         self.send_message(result, queue)
-                                        ch.basic_ack(delivery_tag=method.delivery_tag)
-                                        return
-
-                                    # caminho para alvo único via extra.send_to
-                                    extras = data.get("extra", {})
-                                    if isinstance(extras, dict) and "send_to" in extras:
+                                    elif isinstance(extras, dict) and "send_to" in extras:
                                         logger.info(f"Roteando mensagem para fila alvo única: {extras['send_to']}")
                                         send_to = extras["send_to"]
                                         # usa index vindo dos extras se disponível
@@ -329,19 +327,17 @@ class RabbitMQService:
                                             data["index"] = extras["index"]
                                             message["data"] = data
                                         self.send_message(message, send_to)
-                                        ch.basic_ack(delivery_tag=method.delivery_tag)
-                                        return
-
-                                    # rota para múltiplos targets
-                                    logger.info(f"Roteando mensagem para filas alvo: {target_queues_param}")
-                                    for tqueue in target_queues_param:
-                                        logger.info(f"Roteando mensagem para fila: {tqueue}")
-                                        send_to = tqueue["send_to"] if isinstance(tqueue, dict) else tqueue
-                                        # substitui o `index` dentro do dict `message` pelo index do target queue, se aplicável
-                                        if isinstance(message, dict) and isinstance(tqueue, dict) and "index" in tqueue:
-                                            message["data"]["index"] = tqueue["index"]
-                                        logger.info(f"Roteando para: {send_to}: {message}")
-                                        self.send_message(message, send_to)
+                                    else:
+                                        # rota para múltiplos targets
+                                        logger.info(f"Roteando mensagem para filas alvo: {target_queues_param}")
+                                        for tqueue in target_queues_param:
+                                            logger.info(f"Roteando mensagem para fila: {tqueue}")
+                                            send_to = tqueue["send_to"] if isinstance(tqueue, dict) else tqueue
+                                            # substitui o `index` dentro do dict `message` pelo index do target queue, se aplicável
+                                            if isinstance(message, dict) and isinstance(tqueue, dict) and "index" in tqueue:
+                                                message["data"]["index"] = tqueue["index"]
+                                            logger.info(f"Roteando para: {send_to}: {message}")
+                                            self.send_message(message, send_to)
 
                                     ch.basic_ack(delivery_tag=method.delivery_tag)
                                 except Exception:
