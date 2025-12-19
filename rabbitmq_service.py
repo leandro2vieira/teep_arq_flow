@@ -312,7 +312,7 @@ class RabbitMQService:
                                     if action == "68":
                                         logger.info("Mensagem de verificação recebida (ação 68), respondendo com índices de filas alvo")
                                         result = {
-                                            "action": "68",
+                                            "action": 68,
                                             "data": {
                                                 "index": data.get('index'),
                                                 "value": target_queues_param
