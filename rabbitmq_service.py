@@ -310,6 +310,7 @@ class RabbitMQService:
                                     extras = data.get("extra", {})
 
                                     if action == "68":
+                                        logger.info("Mensagem de verificação recebida (ação 68), respondendo com índices de filas alvo")
                                         result = {
                                             "action": "68",
                                             "data": {
@@ -318,6 +319,7 @@ class RabbitMQService:
                                             }
                                         }
                                         queue = f"recv_queue_index_{data.get('index')}"
+                                        logger.info(f"Mensagem recebida para fila: {queue} - {result}")
                                         self.send_message(result, queue)
                                     elif isinstance(extras, dict) and "send_to" in extras:
                                         logger.info(f"Roteando mensagem para fila alvo única: {extras['send_to']}")
