@@ -213,9 +213,9 @@ class FTPManager:
             logger.exception("upload_file error: %s", e)
             return {'success': False, 'error': str(e)}
 
-    def download_file(self, remote_path: str, local_path: str) -> bool:
+    def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, message]:
         if not self._ensure_connected():
-            return False
+            return False, "FTP not connected"
         remote = normalize_path(remote_path)
         local = normalize_path(local_path)
         try:
@@ -230,10 +230,10 @@ class FTPManager:
                     with open(local, 'wb') as f:
                         self.ftp.retrbinary(f"RETR {name}", f.write)
             logger.info("Downloaded %s -> %s", remote, local)
-            return True
+            return True, ""
         except Exception as e:
             logger.error("download_file error: %s", e)
-            return False
+            return False, f"download_file error: {e}"
 
     def upload_directory(self, local_dir: str, remote_dir: str) -> bool:
         if not self._ensure_connected():
@@ -436,45 +436,45 @@ class FTPManager:
 
     def delete_file(self, remote_path: str) -> bool:
         if not self._ensure_connected():
-            return False
+            return False, "FTP not connected"
         remote = normalize_path(remote_path or '')
         if not remote:
             logger.error("delete_file: empty path")
-            return False
+            return False, "empty path"
         try:
             try:
                 self.ftp.delete(remote)
                 logger.info("Deleted remote file: %s", remote)
-                return True
+                return True, "file deleted"
             except Exception:
                 parent = os.path.dirname(remote)
                 name = os.path.basename(remote)
                 if not name:
                     logger.error("delete_file: invalid name for %s", remote)
-                    return False
+                    return False, "invalid name"
                 try:
                     with self._cwd(parent):
                         self.ftp.delete(name)
                     logger.info("Deleted remote file %s via cwd %s", name, parent)
-                    return True
+                    return True, "file deleted"
                 except Exception as e:
                     logger.warning("delete_file fallback failed for %s: %s", remote, e)
-                    return False
+                    return False, "failed to delete file"
         except Exception as e:
             logger.error("delete_file error: %s", e)
-            return False
+            return False, f"error occurred: {e}"
 
-    def delete_remote_path(self, remote_path: str) -> bool:
+    def delete_remote_path(self, remote_path: str) -> Tuple[bool, str]:
         if not self._ensure_connected():
-            return False
+            return False, "FTP not connected"
         remote = normalize_path(remote_path or '')
         if not remote or remote == '/':
             logger.error("delete_remote_path: invalid path %s", remote)
-            return False
+            return False, "invalid path"
         try:
             # try as file first
             if self.delete_file(remote):
-                return True
+                return True, "file deleted"
             # list children and remove recursively
             children = self.list_remote(remote, include_hidden=True)
             for c in children:
@@ -491,20 +491,20 @@ class FTPManager:
             try:
                 self.ftp.rmd(remote)
                 logger.info("Removed remote directory: %s", remote)
-                return True
+                return True, "directory removed"
             except Exception:
                 parent = os.path.dirname(remote)
                 base = os.path.basename(remote)
                 if not base:
-                    return False
+                    return False, "invalid directory name"
                 try:
                     with self._cwd(parent):
                         self.ftp.rmd(base)
                     logger.info("Removed remote directory %s via cwd %s", base, parent)
-                    return True
+                    return True, "directory removed"
                 except Exception as e:
                     logger.error("Failed to remove directory %s via cwd %s: %s", base, parent, e)
-                    return False
+                    return False, "failed to remove directory"
         except Exception as e:
             logger.error("delete_remote_path error: %s", e)
-            return False
+            return False, f"error occurred: {e}"

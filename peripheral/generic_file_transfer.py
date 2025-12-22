@@ -193,9 +193,21 @@ class GenericFileTransfer:
                 result = self._handle_delete_remote_directory(remote_path)
             else:
                 response['action'] = ActionTable.ERROR.value
-                result = f"Comando desconhecido: {action}"
+                result = f" Comando desconhecido: {action}"
 
-            response['data']['value'] = result
+            # normalize handler return: accept both (bool, payload_or_message) and legacy returns
+            if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], bool):
+                success, payload = result
+
+                # build standardized value
+                if success:
+                    value_obj = {'success': True, 'message': '', 'result': payload}
+                else:
+                    value_obj = {'success': False, 'message': str(payload), 'result': None}
+            else:
+                value_obj = result
+
+            response['data']['value'] = value_obj
 
             value_for_log = response['data']['value']
             if not isinstance(value_for_log, (str, bytes, int, float, type(None))):
@@ -515,7 +527,7 @@ class GenericFileTransfer:
 
         return self._with_ftp(op)
 
-    def _handle_download_directory(self, local_path: str, remote_path: str) -> Dict:
+    def _handle_download_directory(self, local_path: str, remote_path: str) -> Tuple[bool, str]:
         import posixpath
         def op():
             self._send(ActionTable.START_DOWNLOAD_FILE.value)
@@ -621,7 +633,7 @@ class GenericFileTransfer:
             )
 
             logger.info(f"Download directory result: {result}")
-            return verification['success']
+            return verification['success'], verification
 
         return self._with_ftp(op)
 
@@ -637,12 +649,10 @@ class GenericFileTransfer:
 
         return self._with_ftp(op)
 
-    def _handle_delete_remote_file(self, remote_path: str) -> Dict:
+    def _handle_delete_remote_file(self, remote_path: str) -> Tuple[bool, str]:
         def op():
             # use FTPManager.delete_file (refactored name)
             success = self.remote.delete_file(remote_path)
-            if isinstance(success, bool):
-                return {'success': success}
             return success
 
         remote_path = _join_path(self.io.remote_side_path, remote_path)
@@ -651,8 +661,6 @@ class GenericFileTransfer:
     def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
         def op():
             success = self.remote.delete_remote_path(remote_path)
-            if isinstance(success, bool):
-                return {'success': success}
             return success
 
         remote_path = _join_path(self.io.remote_side_path, remote_path)
