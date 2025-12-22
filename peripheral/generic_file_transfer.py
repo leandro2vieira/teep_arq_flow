@@ -529,6 +529,8 @@ class GenericFileTransfer:
 
     def _handle_download_directory(self, local_path: str, remote_path: str) -> Tuple[bool, str]:
         import posixpath
+        import tempfile
+
         def op():
             self._send(ActionTable.START_DOWNLOAD_FILE.value)
             remote_dir = _join_path(self.io.remote_side_path, remote_path)
@@ -537,11 +539,72 @@ class GenericFileTransfer:
             base_name = (local_path or '').replace('/', '').replace('\\', '').strip()
             if not base_name:
                 base_name = 'download'
-            local_dir = _join_path(self.io.server_side_path, f"download_{timestamp}_{base_name}")
-            logger.info(f"Downloading directory from {remote_dir} to {local_dir}")
+
+            # constrói nome de pasta de download
+            download_dir_name = f"download_{timestamp}_{base_name}"
+
+            # tenta criar o diretório dentro de server_side_path; se falhar (read-only), faz fallback para tempdir
+            fallback_used = False
+            fallback_reason = None
+            # Use caminho absoluto baseado em server_side_path
+            try:
+                local_dir = os.path.abspath(os.path.join(self.io.server_side_path or '.', download_dir_name))
+            except Exception:
+                # último recurso: usar tempdir
+                local_dir = os.path.join(tempfile.gettempdir(), download_dir_name)
+                fallback_used = True
+                fallback_reason = "failed to build absolute path"
+
+            try:
+                os.makedirs(local_dir, exist_ok=True)
+            except OSError as e:
+                # trata Read-only file system (errno 30) e permission denied (13)
+                if getattr(e, 'errno', None) in (30, 13):
+                    fallback_used = True
+                    fallback_reason = f"os.makedirs failed: {e}"
+                    try:
+                        local_dir = os.path.join(tempfile.gettempdir(), download_dir_name)
+                        os.makedirs(local_dir, exist_ok=True)
+                    except Exception as e2:
+                        logger.exception("Failed creating fallback download dir: %s", e2)
+                        self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
+                        return False, f"Falha ao criar diretório de download: {e2}"
+                else:
+                    logger.exception("Failed creating download dir: %s", e)
+                    self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
+                    return False, f"Falha ao criar diretório de download: {e}"
+
+            # verifica se é gravável criando um ficheiro temporário
+            try:
+                test_path = os.path.join(local_dir, ".write_test")
+                with open(test_path, "w") as f:
+                    f.write("ok")
+                os.remove(test_path)
+            except Exception as e:
+                fallback_used = True
+                fallback_reason = f"write test failed: {e}"
+                try:
+                    local_dir = os.path.join(tempfile.gettempdir(), download_dir_name)
+                    os.makedirs(local_dir, exist_ok=True)
+                    test_path = os.path.join(local_dir, ".write_test")
+                    with open(test_path, "w") as f:
+                        f.write("ok")
+                    os.remove(test_path)
+                except Exception as e2:
+                    logger.exception("No writable download directory available: %s", e2)
+                    self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
+                    return False, f"Nenhum diretório de download gravável disponível: {e2}"
+
+            logger.info(f"Downloading directory from {remote_dir} to {local_dir} (fallback_used={fallback_used})")
 
             # perform download
-            download_success = self.remote.download_directory(remote_dir, local_dir)
+            try:
+                download_success = self.remote.download_directory(remote_dir, local_dir)
+            except Exception as e:
+                logger.exception("Download directory failed: %s", e)
+                self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
+                return False, f"Falha ao baixar diretório: {e}"
+
             self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
 
             verification = {
@@ -580,16 +643,13 @@ class GenericFileTransfer:
                         if isinstance(e, dict):
                             name = e.get('name') or e.get('filename') or None
                         if not name:
-                            # fallback to empty name; will be handled by path extraction
                             name = ''
 
-                        # prefer a provided full path from the remote entry when available
                         entry_path = None
                         if isinstance(e, dict):
                             entry_path = e.get('path') or e.get('fullpath') or None
 
                         if entry_path:
-                            # ensure posix style
                             file_remote_full = entry_path
                         else:
                             file_remote_full = posixpath.join(cur_remote.rstrip('/'), name)
@@ -598,23 +658,19 @@ class GenericFileTransfer:
                         is_dir = False
                         size = None
                         if isinstance(e, dict):
-                            # common indicators
                             if 'is_dir' in e:
                                 is_dir = bool(e.get('is_dir'))
                             elif 'type' in e:
                                 t = e.get('type')
                                 is_dir = (str(t).lower() == 'directory' or str(t).lower() == 'dir')
-                            # size fields
                             if 'size' in e and e.get('size') is not None:
                                 size = e.get('size')
                             elif 'filesize' in e and e.get('filesize') is not None:
                                 size = e.get('filesize')
 
-                        # compute relative remote path to base_remote and normalize
                         try:
                             rel_remote = posixpath.relpath(file_remote_full, base_remote)
                         except Exception:
-                            # fallback join if relpath fails
                             rel_remote = file_remote_full[len(base_remote):].lstrip('/')
 
                         rel_remote = rel_remote.lstrip('./').replace('\\', '/').lstrip('/')
@@ -622,19 +678,15 @@ class GenericFileTransfer:
                             rel_remote = ''
 
                         if is_dir:
-                            # queue the full path for further listing; keep consistent posix path
                             queue.append(file_remote_full)
                         else:
-                            # include file entries using the relative path inside the base_remote
                             remote_map[rel_remote] = size
 
                 # compare maps (remote -> local)
                 remote_keys = set(remote_map.keys())
                 local_keys = set(local_map.keys())
 
-                # files present on remote but missing locally
                 missing_locally = sorted(list(remote_keys - local_keys))
-                # files present locally but not on remote
                 extra_locally = sorted(list(local_keys - remote_keys))
 
                 size_mismatches = []
@@ -666,14 +718,20 @@ class GenericFileTransfer:
 
             result = {
                 'download_result': download_success if isinstance(download_success, dict) else {'success': bool(download_success)},
-                'verification': verification
+                'verification': verification,
+                'local_target': local_dir,
+                'fallback_used': fallback_used,
+                'fallback_reason': fallback_reason
             }
 
-            self.config_manager.log_operation(
-                "Download Directory",
-                json.dumps(result['download_result']),
-                json.dumps(result)
-            )
+            try:
+                self.config_manager.log_operation(
+                    "Download Directory",
+                    json.dumps(result['download_result']),
+                    json.dumps(result)
+                )
+            except Exception:
+                logger.debug("Failed to log download operation")
 
             logger.info(f"Download directory result: {result}")
             return verification['success'], verification
