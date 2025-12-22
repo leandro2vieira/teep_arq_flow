@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from ftp_manager import FTPManager, normalize_path
 from scp_manager import SCPManager
 from helpers.enums import ActionTable

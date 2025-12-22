@@ -4,7 +4,7 @@ import re
 import logging
 from ftplib import FTP, FTP_TLS
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -213,7 +213,7 @@ class FTPManager:
             logger.exception("upload_file error: %s", e)
             return {'success': False, 'error': str(e)}
 
-    def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, message]:
+    def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, str]:
         if not self._ensure_connected():
             return False, "FTP not connected"
         remote = normalize_path(remote_path)
