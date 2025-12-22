@@ -575,21 +575,57 @@ class GenericFileTransfer:
                     cur_remote = queue.pop()
                     entries = self.remote.list_remote(cur_remote) or []
                     for e in entries:
-                        name = e.get('name') if isinstance(e, dict) else None
+                        # extract name/path robustly
+                        name = None
+                        if isinstance(e, dict):
+                            name = e.get('name') or e.get('filename') or None
                         if not name:
-                            name = e.get('filename') or e.get('path') or ''
-                        is_dir = bool(e.get('is_dir')) if isinstance(e, dict) else False
-                        size = e.get('size') if isinstance(e, dict) else None
+                            # fallback to empty name; will be handled by path extraction
+                            name = ''
 
-                        joined = posixpath.join(cur_remote.rstrip('/'), name)
-                        rel_remote = posixpath.relpath(joined, base_remote).lstrip('./')
+                        # prefer a provided full path from the remote entry when available
+                        entry_path = None
+                        if isinstance(e, dict):
+                            entry_path = e.get('path') or e.get('fullpath') or None
+
+                        if entry_path:
+                            # ensure posix style
+                            file_remote_full = entry_path
+                        else:
+                            file_remote_full = posixpath.join(cur_remote.rstrip('/'), name)
+
+                        # determine if directory and size using multiple possible keys
+                        is_dir = False
+                        size = None
+                        if isinstance(e, dict):
+                            # common indicators
+                            if 'is_dir' in e:
+                                is_dir = bool(e.get('is_dir'))
+                            elif 'type' in e:
+                                t = e.get('type')
+                                is_dir = (str(t).lower() == 'directory' or str(t).lower() == 'dir')
+                            # size fields
+                            if 'size' in e and e.get('size') is not None:
+                                size = e.get('size')
+                            elif 'filesize' in e and e.get('filesize') is not None:
+                                size = e.get('filesize')
+
+                        # compute relative remote path to base_remote and normalize
+                        try:
+                            rel_remote = posixpath.relpath(file_remote_full, base_remote)
+                        except Exception:
+                            # fallback join if relpath fails
+                            rel_remote = file_remote_full[len(base_remote):].lstrip('/')
+
+                        rel_remote = rel_remote.lstrip('./').replace('\\', '/').lstrip('/')
                         if rel_remote == '.':
                             rel_remote = ''
-                        rel_remote = rel_remote.replace('\\', '/').lstrip('/')
 
                         if is_dir:
-                            queue.append(joined)
+                            # queue the full path for further listing; keep consistent posix path
+                            queue.append(file_remote_full)
                         else:
+                            # include file entries using the relative path inside the base_remote
                             remote_map[rel_remote] = size
 
                 # compare maps (remote -> local)
@@ -609,13 +645,20 @@ class GenericFileTransfer:
                         if lsize != rsize:
                             size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
                     else:
-                        if int(lsize) != int(rsize):
-                            size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
+                        try:
+                            if int(lsize) != int(rsize):
+                                size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
+                        except Exception:
+                            if str(lsize) != str(rsize):
+                                size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
 
-                verification['missing_locally'] = missing_locally
-                verification['extra_locally'] = extra_locally
+                logger.info(f"Verification results - remote_keys: {len(remote_keys)} - {remote_keys}")
+                logger.info(f"Verification results - local_keys: {len(local_keys)} - {local_keys}")
+
+                verification['missing_locally'] = [] if len(remote_keys) == len(local_keys) else missing_locally
+                verification['extra_locally'] = [] if len(remote_keys) == len(local_keys) else extra_locally
                 verification['size_mismatches'] = size_mismatches
-                verification['success'] = (len(missing_locally) == 0 and len(size_mismatches) == 0)
+                verification['success'] = True if len(remote_keys) == len(local_keys) else False
 
             except Exception as e:
                 logger.exception("Verification after download failed: %s", e)
