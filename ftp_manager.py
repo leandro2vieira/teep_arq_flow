@@ -433,8 +433,8 @@ class FTPManager:
         except Exception as e:
             logger.error("download_directory error: %s", e)
             return False
-
-    def delete_file(self, remote_path: str) -> bool:
+    
+    def delete_file(self, remote_path: str) -> Tuple[bool, str]:
         if not self._ensure_connected():
             return False, "FTP not connected"
         remote = normalize_path(remote_path or '')
@@ -446,7 +446,8 @@ class FTPManager:
                 self.ftp.delete(remote)
                 logger.info("Deleted remote file: %s", remote)
                 return True, "file deleted"
-            except Exception:
+            except Exception as first_exc:
+                # fallback: try deleting by changing to parent and removing basename
                 parent = os.path.dirname(remote)
                 name = os.path.basename(remote)
                 if not name:
@@ -457,12 +458,17 @@ class FTPManager:
                         self.ftp.delete(name)
                     logger.info("Deleted remote file %s via cwd %s", name, parent)
                     return True, "file deleted"
-                except Exception as e:
-                    logger.warning("delete_file fallback failed for %s: %s", remote, e)
-                    return False, "failed to delete file"
+                except Exception as second_exc:
+                    msg = str(second_exc)
+                    # detect FTP permission/file-not-found style codes (e.g. 550)
+                    if '550' in msg:
+                        logger.warning("delete_file fallback failed for %s: %s", remote, msg)
+                    else:
+                        logger.warning("delete_file fallback failed for %s: %s", remote, msg)
+                    return False, msg
         except Exception as e:
-            logger.error("delete_file error: %s", e)
-            return False, f"error occurred: {e}"
+            logger.exception("delete_file error: %s", e)
+            return False, str(e)
 
     def delete_remote_path(self, remote_path: str) -> Tuple[bool, str]:
         if not self._ensure_connected():
@@ -473,8 +479,9 @@ class FTPManager:
             return False, "invalid path"
         try:
             # try as file first
-            if self.delete_file(remote):
-                return True, "file deleted"
+            ok, msg = self.delete_file(remote)
+            if ok:
+                return True, msg
             # list children and remove recursively
             children = self.list_remote(remote, include_hidden=True)
             for c in children:
@@ -482,10 +489,11 @@ class FTPManager:
                 if not path:
                     continue
                 if c.get('type') == 'file':
-                    if not self.delete_file(path):
-                        logger.warning("Failed to delete file %s", path)
+                    ok, msg = self.delete_file(path)
+                    if not ok:
+                        logger.warning("Failed to delete file %s: %s", path, msg)
                 else:
-                    if not self.delete_remote_path(path):
+                    if not self.delete_remote_path(path)[0]:
                         logger.warning("Failed to delete directory %s", path)
             # remove the directory itself
             try:
