@@ -319,7 +319,7 @@ Progresso no envio de arquivo ou diretório:
     }
 }
 ```
-- Listar actions in automation
+- Listar periféricos no automation
 ```json
 {
   "action": 68, 
