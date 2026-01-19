@@ -222,7 +222,10 @@ class FlaskWebApp:
                     mgr.disconnect()
                     return jsonify({'success': True, 'message': 'Connection successful'})
                 else:
-                    return jsonify({'success': False, 'message': 'Connection failed; see server logs for details'}), 200
+                    # try to include manager last-error diagnostics when available
+                    last_err = getattr(mgr, '_last_error', None) or getattr(mgr, 'last_error', None)
+                    msg = f"Connection failed: {last_err}" if last_err else 'Connection failed; see server logs for details'
+                    return jsonify({'success': False, 'message': msg}), 200
             except Exception as e:
                 try:
                     if mgr:

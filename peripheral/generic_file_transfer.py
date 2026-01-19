@@ -484,13 +484,15 @@ class GenericFileTransfer:
 
                 # send verification result
                 verification['success'] = True
-                self._send(ActionTable.VERIFY_STREAM_FILE.value, verification)
+                self._send(ActionTable.FINISH_STREAM_FILE.value, verification)
 
             except Exception as e:
                 logger.exception("Error processing directory upload")
                 self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': str(e)})
 
-        return self._send(ActionTable.STREAM_DIRECTORY.value, {'status': 'done'})
+        result = self._with_ftp(op)
+
+        return self._send(ActionTable.STREAM_DIRECTORY.value, result)
 
     # --- file and directory handling ------------------------------------------------
 

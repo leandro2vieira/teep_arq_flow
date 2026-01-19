@@ -254,7 +254,7 @@ class FTPManager:
                     self._create_remote_dirs(parent)
                     if not self.upload_file(str(item), remote_file):
                         logger.warning("Failed to upload %s", item)
-            logger.info("Uploaded directory %s -> %s", local_dir, remote_dir)
+            logger.info("Uploaded directory %s ->  %s", local_dir, remote_dir)
             return True
         except Exception as e:
             logger.error("upload_directory error: %s", e)

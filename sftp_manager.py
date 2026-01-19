@@ -19,23 +19,35 @@ class SFTPManager:
         self.key_filename = None
         self.ssh: Optional[paramiko.SSHClient] = None
         self.sftp: Optional[paramiko.SFTPClient] = None
+        # store last error to help diagnostics
+        self._last_error: Optional[str] = None
 
     def test_socket_connect(self) -> bool:
         try:
             import socket
+            # try to resolve host first to give clearer diagnostics
+            try:
+                infos = socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM)
+                logger.debug("Resolved %s -> %s", self.host, infos)
+            except Exception as e:
+                logger.debug("getaddrinfo failed for %s:%s -> %r", self.host, self.port, e)
+
             addr = (self.host, int(self.port))
             sock = socket.create_connection(addr, timeout=self.timeout)
             sock.close()
+            self._last_error = None
             return True
         except Exception as e:
-            logger.debug("sftp socket test failed for %s:%s -> %s", self.host, self.port, e)
+            err = repr(e)
+            logger.debug("sftp socket test failed for %s:%s -> %s", self.host, self.port, err)
+            self._last_error = f"socket_connect_failed: {err}"
             return False
 
     def connect(self) -> bool:
         # quick reachability check
         try:
             if not self.test_socket_connect():
-                logger.error("SFTP connect error: cannot reach %s:%s (TCP connect failed)", self.host, self.port)
+                logger.error("SFTP connect error: cannot reach %s:%s (TCP connect failed) - %s", self.host, self.port, self._last_error)
                 return False
         except Exception:
             pass
@@ -52,7 +64,9 @@ class SFTPManager:
             logger.info("SFTP connected: %s:%s", self.host, self.port)
             return True
         except Exception as e:
-            logger.error("SFTP connect error: %r", e)
+            err = repr(e)
+            logger.error("SFTP connect error: %s", err)
+            self._last_error = f"ssh_connect_failed: {err}"
             try:
                 self.disconnect()
             except Exception:
@@ -77,68 +91,16 @@ class SFTPManager:
         except Exception:
             pass
 
-    def upload_file(self, local_path: str, remote_path: str) -> bool:
-        try:
-            if not self.sftp:
-                raise RuntimeError("Not connected")
-            remote_dir = os.path.dirname(remote_path)
-            if remote_dir:
-                self._mkdir_remote_recursive(remote_dir)
-            self.sftp.put(local_path, remote_path)
-            logger.info("SFTP: uploaded %s -> %s", local_path, remote_path)
-            return True
-        except Exception as e:
-            logger.error("SFTP upload_file error: %s", e)
-            return False
-
-    def download_file(self, remote_path: str, local_path: str) -> bool:
-        try:
-            if not self.sftp:
-                raise RuntimeError("Not connected")
-            os.makedirs(os.path.dirname(local_path) or '.', exist_ok=True)
-            self.sftp.get(remote_path, local_path)
-            logger.info("SFTP: downloaded %s -> %s", remote_path, local_path)
-            return True
-        except Exception as e:
-            logger.error("SFTP download_file error: %s", e)
-            return False
-
-    def upload_directory(self, local_dir: str, remote_dir: str) -> bool:
-        try:
-            if not self.sftp:
-                raise RuntimeError("Not connected")
-            local_path = Path(local_dir)
-            for item in local_path.rglob('*'):
-                if item.is_file():
-                    rel = item.relative_to(local_path)
-                    remote_file = f"{remote_dir}/{rel.as_posix()}"
-                    remote_parent = os.path.dirname(remote_file)
-                    if remote_parent:
-                        self._mkdir_remote_recursive(remote_parent)
-                    self.sftp.put(str(item), remote_file)
-            logger.info("SFTP: directory uploaded %s -> %s", local_dir, remote_dir)
-            return True
-        except Exception as e:
-            logger.error("SFTP upload_directory error: %s", e)
-            return False
-
-    def download_directory(self, remote_dir: str, local_dir: str) -> bool:
-        try:
-            if not self.sftp:
-                raise RuntimeError("Not connected")
-            os.makedirs(local_dir, exist_ok=True)
-            self._download_recursive(remote_dir, local_dir)
-            logger.info("SFTP: directory downloaded %s -> %s", remote_dir, local_dir)
-            return True
-        except Exception as e:
-            logger.error("SFTP download_directory error: %s", e)
-            return False
-
     def _mkdir_remote_recursive(self, remote_path: str):
-        parts = remote_path.strip('/').split('/')
-        cur = ''
+        # Create directories recursively. Preserve absolute vs relative.
+        if not remote_path:
+            return
+        is_abs = remote_path.startswith('/')
+        # split parts ignoring leading/trailing slashes
+        parts = [p for p in remote_path.strip('/').split('/') if p]
+        cur = '/' if is_abs else ''
         for p in parts:
-            cur = f"{cur}/{p}" if cur else p
+            cur = f"{cur.rstrip('/')}/{p}" if cur else p
             try:
                 self.sftp.mkdir(cur)
             except IOError:
@@ -147,74 +109,133 @@ class SFTPManager:
                 except Exception:
                     pass
             except Exception:
+                # ignore other errors (may already exist or permissions)
                 pass
 
-    # compatibility helpers used by GenericFileTransfer
-    def ensure_dir(self, remote_path: str):
-        """Ensure remote_path exists (compat wrapper)."""
-        try:
-            if not remote_path:
-                return True
-            self._mkdir_remote_recursive(remote_path)
-            return True
-        except Exception:
-            return False
+    def _normalize_remote(self, path: Optional[str]) -> str:
+        """Normalize remote path to posix style and remove duplicate slashes; keep leading slash if present."""
+        if not path:
+            return ''
+        p = path.replace('\\', '/')
+        # collapse multiple slashes
+        while '//' in p:
+            p = p.replace('//', '/')
+        # strip trailing slash except root
+        if len(p) > 1 and p.endswith('/'):
+            p = p.rstrip('/')
+        return p
 
-    def mkdir(self, remote_path: str):
-        """Create single directory (compat)."""
+    # Make upload_file return dict similar to FTPManager.upload_file
+    def upload_file(self, local_path: str, remote_path: str) -> bool:
+        if not self.sftp:
+            return {'success': False, 'error': 'Not connected'}
+        remote = self._normalize_remote(remote_path)
+        if not remote:
+            logger.error("upload_file: empty remote path")
+            return {'success': False, 'error': 'empty remote path'}
+        if not os.path.isfile(local_path):
+            logger.error("upload_file: local file not found: %s", local_path)
+            return {'success': False, 'error': 'local file not found'}
         try:
-            self.sftp.mkdir(remote_path)
-            return True
-        except Exception:
-            return False
-
-    def stat(self, remote_path: str) -> Dict[str, Any]:
-        """Return a dict with size/modified if possible, else empty dict."""
-        try:
-            st = self.sftp.stat(remote_path)
-            return {'size': getattr(st, 'st_size', None), 'modified': getattr(st, 'st_mtime', None)}
-        except Exception:
-            return {}
-
-    def delete_file(self, remote_path: str) -> bool:
-        try:
-            self.sftp.remove(remote_path)
-            return True
-        except Exception as e:
-            logger.error("SFTP delete_file error: %s", e)
-            return False
-
-    def delete_directory(self, remote_path: str) -> bool:
-        """Attempt to remove remote directory recursively if needed."""
-        try:
-            # try rmdir (will fail if not empty)
             try:
-                self.sftp.rmdir(remote_path)
-                return True
-            except Exception:
-                # attempt recursive delete
-                entries = self.list_remote(remote_path, recursive=False) or []
-                for e in entries:
-                    name = e.get('name')
-                    if not name:
-                        continue
-                    child_path = f"{remote_path.rstrip('/')}/{name}"
-                    if e.get('is_dir'):
-                        self.delete_directory(child_path)
-                    else:
-                        try:
-                            self.sftp.remove(child_path)
-                        except Exception:
-                            pass
-                # now try rmdir again
+                # try direct put
+                self.sftp.put(local_path, remote)
+                logger.info("SFTP: uploaded %s -> %s", local_path, remote)
+                return {'success': True}
+            except Exception as first_exc:
+                logger.debug("Direct sftp.put failed for %s -> %s: %s", local_path, remote, first_exc)
+                parent = os.path.dirname(remote)
+                name = os.path.basename(remote)
+                if parent:
+                    try:
+                        # create parent dirs and retry
+                        self._mkdir_remote_recursive(parent)
+                    except Exception:
+                        logger.debug("Failed to create remote parent dirs for %s (ignored)", parent)
                 try:
-                    self.sftp.rmdir(remote_path)
-                    return True
-                except Exception as e:
-                    logger.error("SFTP delete_directory final rmdir failed: %s", e)
-                    return False
+                    # retry put after ensuring dirs
+                    self.sftp.put(local_path, remote)
+                    logger.info("SFTP: uploaded %s -> %s (after mkdir)", local_path, remote)
+                    return {'success': True}
+                except Exception as second_exc:
+                    logger.error("upload_file fallback failed for %s -> %s: %s", local_path, remote, second_exc)
+                    return {'success': False, 'error': str(second_exc)}
         except Exception as e:
-            logger.error("SFTP delete_directory error: %s", e)
+            logger.exception("upload_file error: %s", e)
+            return {'success': False, 'error': str(e)}
+
+    def download_file(self, remote_path: str, local_path: str) -> bool:
+        # Return signature similar to FTPManager.download_file: (bool, message)
+        if not self.sftp:
+            return False, "Not connected"
+        remote = self._normalize_remote(remote_path)
+        local = local_path
+        try:
+            os.makedirs(os.path.dirname(local) or '.', exist_ok=True)
+            try:
+                self.sftp.get(remote, local)
+            except Exception:
+                # fallback: try retrieving by basename after checking parent
+                parent = os.path.dirname(remote)
+                name = os.path.basename(remote)
+                try:
+                    # attempt to list parent to see if exists
+                    self.sftp.listdir(parent)
+                    self.sftp.get(f"{parent}/{name}", local)
+                except Exception as inner:
+                    logger.error("SFTP download fallback failed for %s: %s", remote, inner)
+                    return False, str(inner)
+            logger.info("SFTP: downloaded %s -> %s", remote, local)
+            return True, ""
+        except Exception as e:
+            logger.error("SFTP download_file error: %s", e)
+            return False, f"download_file error: {e}"
+
+    def upload_directory(self, local_dir: str, remote_dir: str) -> bool:
+        if not self.sftp:
+            return False
+        try:
+            logger.info("SFTP: uploading directory %s -> %s", local_dir, remote_dir)
+            base = Path(local_dir)
+            if not base.exists():
+                logger.error("upload_directory: local dir not found: %s", local_dir)
+                return False
+            remote_base = self._normalize_remote(remote_dir or '')
+            # ensure base dir exists remotely
+            if remote_base:
+                try:
+                    self._mkdir_remote_recursive(remote_base)
+                except Exception:
+                    pass
+            for item in base.rglob('*'):
+                if item.is_file():
+                    rel = item.relative_to(base)
+                    remote_file = f"{remote_base}/{rel.as_posix()}" if remote_base else rel.as_posix()
+                    res = self.upload_file(str(item), remote_file)
+                    # upload_file returns dict
+                    ok = False
+                    if isinstance(res, dict):
+                        ok = res.get('success', False)
+                    else:
+                        ok = bool(res)
+                    if not ok:
+                        logger.warning("Failed to upload %s -> %s (continuing)", item, remote_file)
+            logger.info("SFTP: uploaded directory %s -> %s", local_dir, remote_dir)
+            return True
+        except Exception as e:
+            logger.error("SFTP upload_directory error: %s", e)
+            return False
+
+    def download_directory(self, remote_dir: str, local_dir: str) -> bool:
+        if not self.sftp:
+            return False
+        try:
+            os.makedirs(local_dir, exist_ok=True)
+            self._download_recursive(self._normalize_remote(remote_dir), local_dir)
+            logger.info("SFTP: directory downloaded %s -> %s", remote_dir, local_dir)
+            return True
+        except Exception as e:
+            logger.error("SFTP download_directory error: %s", e)
             return False
 
     def _download_recursive(self, remote_dir: str, local_dir: str):
@@ -264,7 +285,8 @@ class SFTPManager:
             remote_path = '.'
         if not self.sftp:
             if not self.connect():
-                logger.error('list_remote: not connected and connect() failed')
+                # include last error if available to aid troubleshooting
+                logger.error('list_remote: not connected and connect() failed: %s', self._last_error or 'no details')
                 return results
         seen = 0
         def _walk(path: str, depth: int) -> list[Dict[str, Any]]:
@@ -303,4 +325,3 @@ class SFTPManager:
         except Exception as e:
             logger.error('list_remote: unexpected error: %s', e)
         return results
-
