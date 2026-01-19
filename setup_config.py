@@ -208,6 +208,17 @@ class ConfigManager:
             cursor.execute(f"PRAGMA table_info('{table_name}')")
             return [r[1] for r in cursor.fetchall()]
 
+        # Ensure peripheral has server_os column (migration for older DBs)
+        try:
+            p_cols = _get_columns('peripheral')
+            if 'server_os' not in p_cols:
+                # add the column (no NOT NULL to stay compatible) and backfill with default
+                cursor.execute("ALTER TABLE peripheral ADD COLUMN server_os TEXT")
+                cursor.execute("UPDATE peripheral SET server_os = 'linux' WHERE server_os IS NULL OR server_os = ''")
+        except Exception:
+            # ignore if table doesn't exist or other issues
+            pass
+
         # Migrate trigger table if it has legacy columns
         try:
             trig_cols = _get_columns('trigger')
