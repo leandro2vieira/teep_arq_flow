@@ -789,8 +789,17 @@ function openPeripheralModal(id){
       document.getElementById('peripheralInterface').value = p.interface||'';
       document.getElementById('peripheralDevice').value = p.device||'';
       document.getElementById('peripheralModel').value = p.model||'';
-      // set server_os if present
-      try{ document.getElementById('peripheralServerOS').value = p.server_os || 'linux'; } catch(e){}
+      // set server_os if present - normalize to match option values (lowercase) and fallback to 'linux'
+      try{
+        const sel = document.getElementById('peripheralServerOS');
+        if(sel){
+          const raw = (p.server_os || 'linux').toString();
+          const val = raw.toLowerCase();
+          // ensure the value exists among options, otherwise fallback to 'linux'
+          const has = Array.from(sel.options).some(o => o.value === val);
+          sel.value = has ? val : 'linux';
+        }
+      } catch(e){}
       document.getElementById('peripheralJsonConnectionParams').value = prettyJson(p.json_connection_params);
       document.getElementById('peripheralJsonChannelToVirtualIndex').value = prettyJson(p.json_channel_to_virtual_index);
       modal.classList.add('active');
@@ -1164,7 +1173,7 @@ async function loadAutomations() {
         <td>${escapeHtml(auto.name)}</td>
         <td>${(triggers && triggers.length) || 0}</td>
         <td>${(actions && actions.length) || 0}</td>
-        <td>${(results && results.length) || 0}</td>
+        <td>${(results && results.length) ||  0}</td>
         <td>${auto.created_at || 'N/A'}</td>
         <td style="text-align:right">
           <div class="actions">
