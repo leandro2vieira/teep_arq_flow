@@ -19,6 +19,8 @@ class IO:
         self.notification_type = config.get('notification_type', 4)
         self.server_side_path = config.get('server_side_path', './')
         self.remote_side_path = config.get('remote_side_path', './')
+        # server_os may be provided in io config or in parent config; default to 'linux'
+        self.server_os = config.get('server_os') or config.get('serverOS') or 'linux'
 
         print(f"{config} - IO initialized with index: {self.index}, notification_type: {self.notification_type}, server_side_path: {self.server_side_path}, remote_side_path: {self.remote_side_path}", flush=True)
 
@@ -84,7 +86,11 @@ class GenericFileTransfer:
                 timeout=self.timeout
             )
 
-        self.io: IO = IO(io_config.get('GENERIC_FILE_TRANSFER', {}))
+        # merge possible server_os from top-level config into io config for convenience
+        merged_io = io_config.get('GENERIC_FILE_TRANSFER', {}) or {}
+        if 'server_os' not in merged_io and 'server_os' in config:
+            merged_io['server_os'] = config.get('server_os')
+        self.io: IO = IO(merged_io)
 
         self.send_message = send_message_callback
         self.config_manager = config_manager
@@ -236,6 +242,8 @@ class GenericFileTransfer:
         Best-effort: ignores errors for existing directories.
         """
         import posixpath
+        import ntpath
+        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
 
         if not remote_dir:
             return True
@@ -247,7 +255,7 @@ class GenericFileTransfer:
 
         cur = ''
         for part in parts:
-            cur = posixpath.join(cur, part)
+            cur = path_mod.join(cur, part)
             try:
                 # prefer high-level helpers if present
                 if hasattr(self.remote, 'make_dirs'):
@@ -286,9 +294,12 @@ class GenericFileTransfer:
 
     def _handle_upload_directory(self, local_path: str, remote_path: str) -> Dict:
         import posixpath
+        import ntpath
+        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
         new_remote_path = local_path
         local_path = _join_path(self.io.server_side_path, local_path)
         remote_path = _join_path(self.io.remote_side_path, remote_path)
+        # when composing remote paths, use appropriate path module
         remote_path = _join_path(remote_path, new_remote_path)
         def op():
             self._send(ActionTable.START_STREAM_FILE.value, {'status': 'start'})
@@ -325,9 +336,15 @@ class GenericFileTransfer:
                 # upload files one by one so progress can be reported
                 upload_errors = []
                 for abs_path, rel_path, size in sorted(files_to_upload, key=lambda x: x[1]):
-                    # build remote target path using posix style
-                    remote_target = posixpath.join(remote_dir.rstrip('/'), rel_path).lstrip('/')
-                    remote_target = f"/{remote_target}" if not remote_target.startswith('/') else remote_target
+                    # build remote target using server OS conventions (posix for linux, nt for windows)
+                    # normalize rel_path to posix style for FTP listing compatibility
+                    rel_norm = rel_path.replace('\\', '/').lstrip('/')
+                    if getattr(self.io, 'server_os', 'linux') == 'linux':
+                        remote_target = posixpath.join(remote_dir.rstrip('/'), rel_norm).lstrip('/')
+                        remote_target = f"/{remote_target}" if not remote_target.startswith('/') else remote_target
+                    else:
+                        # windows style remote paths: avoid forcing leading '/'
+                        remote_target = ntpath.join(remote_dir.rstrip('/').replace('/', '\\'), rel_norm.replace('/', '\\'))
 
                     # ensure parent folders exist on remote before uploading
                     parent_remote = posixpath.dirname(remote_target)
@@ -468,6 +485,8 @@ class GenericFileTransfer:
 
     def _handle_upload_file(self, local_path: str, remote_path: str) -> Dict:
         import posixpath
+        import ntpath
+        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
 
         def op():
             self._send(ActionTable.START_STREAM_FILE.value)
@@ -475,7 +494,12 @@ class GenericFileTransfer:
             filename = os.path.basename(local_file)
 
             remote_dir = _join_path(self.io.remote_side_path, remote_path)
-            remote_file = _join_path(remote_dir, filename)
+            # build remote_file using appropriate path module
+            if getattr(self.io, 'server_os', 'linux') == 'linux':
+                remote_file = _join_path(remote_dir, filename)
+            else:
+                # for windows remote servers, avoid leading slash in target
+                remote_file = (_join_path(remote_dir, filename)).lstrip('/').replace('/', '\\')
 
             # try to get total size for progress reporting
             try:
@@ -535,7 +559,7 @@ class GenericFileTransfer:
             self._send(ActionTable.START_DOWNLOAD_FILE.value)
             remote_dir = _join_path(self.io.remote_side_path, remote_path)
             timestamp = datetime.now().strftime("%H%M%S_%d%m%Y")
-            # Remove barras e backslashes para ficar apenas um nome
+            # Remove barras and backslashes to leave a single name (prevent nested dirs)
             base_name = (local_path or '').replace('/', '').replace('\\', '').strip()
             if not base_name:
                 base_name = 'download'
@@ -652,7 +676,12 @@ class GenericFileTransfer:
                         if entry_path:
                             file_remote_full = entry_path
                         else:
-                            file_remote_full = posixpath.join(cur_remote.rstrip('/'), name)
+                            # build file remote path using server's OS conventions
+                            if getattr(self.io, 'server_os', 'linux') == 'linux':
+                                file_remote_full = posixpath.join(cur_remote.rstrip('/'), name)
+                            else:
+                                import ntpath as _nt
+                                file_remote_full = _nt.join(cur_remote.rstrip('/').replace('/', '\\'), name)
 
                         # determine if directory and size using multiple possible keys
                         is_dir = False
@@ -669,7 +698,12 @@ class GenericFileTransfer:
                                 size = e.get('filesize')
 
                         try:
-                            rel_remote = posixpath.relpath(file_remote_full, base_remote)
+                            # compute relative remote path using posix relpath for normalization
+                            if getattr(self.io, 'server_os', 'linux') == 'linux':
+                                rel_remote = posixpath.relpath(file_remote_full, base_remote)
+                            else:
+                                # for windows style remote paths, normalize backslashes then compute
+                                rel_remote = file_remote_full.replace('\\', '/')[len(base_remote.replace('\\', '/')):]
                         except Exception:
                             rel_remote = file_remote_full[len(base_remote):].lstrip('/')
 
@@ -683,6 +717,7 @@ class GenericFileTransfer:
                             remote_map[rel_remote] = size
 
                 # compare maps (remote -> local)
+                # remote_map keys should represent paths relative to the remote base; local_map keys relative to local_dir
                 remote_keys = set(remote_map.keys())
                 local_keys = set(local_map.keys())
 
@@ -775,3 +810,4 @@ class GenericFileTransfer:
             return file_list
 
         return self._with_ftp(op)
+

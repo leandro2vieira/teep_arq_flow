@@ -127,6 +127,8 @@ class FlaskWebApp:
                     name=name,
                     interface=data.get('interface'),
                     json_connection_params=data.get('json_connection_params'),
+                    # accept server_os explicitly (optional)
+                    server_os=data.get('server_os'),
                     device=data.get('device'),
                     model=data.get('model'),
                     json_channel_to_virtual_index=data.get('json_channel_to_virtual_index')
@@ -146,6 +148,7 @@ class FlaskWebApp:
                     name=data.get('name'),
                     interface=data.get('interface'),
                     json_connection_params=data.get('json_connection_params'),
+                    server_os=data.get('server_os'),
                     device=data.get('device'),
                     model=data.get('model'),
                     json_channel_to_virtual_index=data.get('json_channel_to_virtual_index')

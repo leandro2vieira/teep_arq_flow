@@ -390,6 +390,15 @@
         </div>
 
         <div class="form-group">
+          <label>Server OS</label>
+          <select id="peripheralServerOS">
+            <option value="linux">Linux</option>
+            <option value="windows">Windows</option>
+          </select>
+          <small style="color:var(--muted)">Escolha o sistema de arquivos do servidor remoto (impacta envio/remoção de caminhos)</small>
+        </div>
+
+        <div class="form-group">
           <label>Parâmetros de Conexão (JSON)</label>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
             <button type="button" class="btn" onclick="insertDefaultConnectionParams()">Inserir JSON padrão</button>
@@ -780,12 +789,16 @@ function openPeripheralModal(id){
       document.getElementById('peripheralInterface').value = p.interface||'';
       document.getElementById('peripheralDevice').value = p.device||'';
       document.getElementById('peripheralModel').value = p.model||'';
+      // set server_os if present
+      try{ document.getElementById('peripheralServerOS').value = p.server_os || 'linux'; } catch(e){}
       document.getElementById('peripheralJsonConnectionParams').value = prettyJson(p.json_connection_params);
       document.getElementById('peripheralJsonChannelToVirtualIndex').value = prettyJson(p.json_channel_to_virtual_index);
       modal.classList.add('active');
     }).catch(e=>{ showAlert('error','Erro ao carregar periférico'); console.error(e); });
   } else {
     title.textContent = 'Novo Periférico';
+    // default server os
+    try{ document.getElementById('peripheralServerOS').value = 'linux'; } catch(e){}
     modal.classList.add('active');
   }
 }
@@ -1013,6 +1026,7 @@ async function savePeripheral(e){
   const payload = {
     name: document.getElementById('peripheralName').value,
     interface: document.getElementById('peripheralInterface').value || null,
+    server_os: document.getElementById('peripheralServerOS') ? document.getElementById('peripheralServerOS').value : null,
     device: document.getElementById('peripheralDevice').value || null,
     model: document.getElementById('peripheralModel').value || null,
     json_connection_params: parseJsonField('peripheralJsonConnectionParams'),

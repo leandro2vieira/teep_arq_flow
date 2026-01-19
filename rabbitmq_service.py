@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict, Any, TYPE_CHECKING, Optional
 import pika
 import time
 import os
@@ -25,7 +25,7 @@ def consume_queue(q: Queue, business_callback):
 
         business_callback(command)
 
-def body_to_dict(body) -> dict | None:
+def body_to_dict(body) -> Optional[dict]:
     """Converte `body` (bytes ou str) para dict JSON. Retorna None se falhar."""
     if isinstance(body, bytes):
         try:
@@ -168,6 +168,16 @@ class RabbitMQService:
                 logger.warning("json_connection_params is not a dict for peripheral %r, got %r; using empty config", peripheral, type(json_connection_params))
                 json_connection_params = {}
 
+            # Ensure server_os flag is present in connection params (prefer explicit peripheral value)
+            try:
+                p_server_os = peripheral.get('server_os') if isinstance(peripheral, dict) else None
+                if not p_server_os:
+                    p_server_os = 'linux'
+                if isinstance(json_connection_params, dict):
+                    json_connection_params.setdefault('server_os', p_server_os)
+            except Exception:
+                pass
+
             if isinstance(json_channel_to_virtual_index, str):
                 try:
                     json_channel_to_virtual_index = json.loads(json_channel_to_virtual_index)
@@ -274,6 +284,7 @@ class RabbitMQService:
 
                                 for target_queue in _target_queues:
                                     send_to = None
+                                    index_to = None
                                     logger.info(f"Processing target queue: {target_queue}, {type(target_queue)}")
                                     try:
                                         index_to = target_queue['index']

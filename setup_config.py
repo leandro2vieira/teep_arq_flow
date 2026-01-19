@@ -86,6 +86,8 @@ class ConfigManager:
                            TEXT,
                            json_connection_params
                            TEXT,
+                           server_os
+                           TEXT,
                            device
                            TEXT,
                            model
@@ -390,6 +392,9 @@ class ConfigManager:
                         r[fld] = json.loads(r[fld])
                     except Exception:
                         pass
+            # ensure server_os present (default to linux for backward compatibility)
+            if 'server_os' not in r or not r.get('server_os'):
+                r['server_os'] = 'linux'
         return results
 
     def get_peripheral(self, peripheral_id: int) -> Optional[Dict]:
@@ -409,12 +414,15 @@ class ConfigManager:
                     result[fld] = json.loads(result[fld])
                 except Exception:
                     pass
+        if 'server_os' not in result or not result.get('server_os'):
+            result['server_os'] = 'linux'
         return result
 
     def create_peripheral(self,
                           name: str,
                           interface: Optional[str] = None,
                           json_connection_params: Any = None,
+                          server_os: Optional[str] = None,
                           device: Optional[str] = None,
                           model: Optional[str] = None,
                           json_channel_to_virtual_index: Any = None) -> int:
@@ -426,12 +434,22 @@ class ConfigManager:
         j_chan = json.dumps(
             json_channel_to_virtual_index) if json_channel_to_virtual_index is not None and not isinstance(
             json_channel_to_virtual_index, str) else json_channel_to_virtual_index
+        # prefer explicit server_os parameter, fall back to value inside json_connection_params, default to 'linux'
+        if server_os is None:
+            try:
+                if isinstance(json_connection_params, dict) and 'server_os' in json_connection_params:
+                    server_os = json_connection_params.get('server_os')
+            except Exception:
+                server_os = None
+        if not server_os:
+            server_os = 'linux'
+
         cursor.execute('''
                        INSERT INTO peripheral
-                       (name, interface, json_connection_params, device, model, json_channel_to_virtual_index,
+                       (name, interface, json_connection_params, server_os, device, model, json_channel_to_virtual_index,
                         last_update)
-                       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                       ''', (name, interface, j_conn, device, model, j_chan))
+                       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                       ''', (name, interface, j_conn, server_os, device, model, j_chan))
         pid = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -445,7 +463,8 @@ class ConfigManager:
                           json_connection_params: Any = None,
                           device: Optional[str] = None,
                           model: Optional[str] = None,
-                          json_channel_to_virtual_index: Any = None):
+                          json_channel_to_virtual_index: Any = None,
+                          server_os: Optional[str] = None):
         """Update an existing peripheral; sets last_update to CURRENT_TIMESTAMP"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -474,6 +493,9 @@ class ConfigManager:
                                                                                  str) else json_channel_to_virtual_index
             fields.append("json_channel_to_virtual_index = ?")
             params.append(j_chan)
+        if server_os is not None:
+            fields.append("server_os = ?")
+            params.append(server_os)
 
         if fields:
             # always update last_update
