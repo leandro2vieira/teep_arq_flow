@@ -402,9 +402,11 @@
           <label>Parâmetros de Conexão (JSON)</label>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
             <button type="button" class="btn" onclick="insertDefaultConnectionParams()">Inserir JSON padrão</button>
+            <button type="button" class="btn ghost" onclick="testPeripheralConnection()">🔎 Testar Conexão</button>
             <small style="color:var(--muted)">Ex: host, port, timeout, model</small>
           </div>
           <textarea id="peripheralJsonConnectionParams" rows="4" placeholder='{"host":"192.168.0.7","port":8234,"timeout":3}'></textarea>
+          <div id="connectionTestResult" style="margin-top:8px;color:var(--muted);"></div>
         </div>
 
         <div class="form-group">
@@ -1632,6 +1634,28 @@ async function deleteResult(id) {
     console.error(e);
     showAlert('error', 'Erro ao deletar result');
   }
+}
+
+async function testPeripheralConnection(){
+  const ta = document.getElementById('peripheralJsonConnectionParams');
+  const resultEl = document.getElementById('connectionTestResult');
+  resultEl.textContent = 'Testing...';
+  let payload = {};
+  try{
+    const raw = ta.value.trim();
+    if(!raw){ resultEl.textContent = 'Preencha os parâmetros de conexão (JSON)'; return; }
+    let parsed;
+    try{ parsed = JSON.parse(raw); } catch(e){ resultEl.textContent = 'JSON inválido'; return; }
+    payload = { json_connection_params: parsed };
+  }catch(e){ resultEl.textContent = 'Erro ao preparar payload'; return; }
+
+  try{
+    const res = await fetch('/api/peripheral_test_connection', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const body = await res.json().catch(()=>null);
+    if(!body){ resultEl.textContent = 'Resposta inválida do servidor'; return; }
+    if(body.success){ resultEl.style.color = 'var(--accent-2)'; resultEl.textContent = 'OK: '+ (body.message || 'Conexão bem sucedida'); }
+    else { resultEl.style.color = '#ff8a8a'; resultEl.textContent = 'FAILED: '+ (body.message || 'Falha na conexão'); }
+  }catch(e){ resultEl.style.color = '#ff8a8a'; resultEl.textContent = 'Erro: '+ String(e); }
 }
 </script>
 </body>

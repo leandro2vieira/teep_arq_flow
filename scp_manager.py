@@ -30,7 +30,28 @@ class SCPManager:
         self.sftp: paramiko.SFTPClient | None = None
         self.scp: SCPClient | None = None
 
+    def test_socket_connect(self) -> bool:
+        """Quick check if TCP connect to host:port is possible (helps differentiate network vs SSH errors)."""
+        try:
+            import socket
+            addr = (self.host, int(self.port))
+            sock = socket.create_connection(addr, timeout=self.timeout)
+            sock.close()
+            return True
+        except Exception as e:
+            logger.debug("socket test failed for %s:%s -> %s", self.host, self.port, e)
+            return False
+
     def connect(self) -> bool:
+        # quick reachability check to provide a clearer error when port/host is unreachable
+        try:
+            if not self.test_socket_connect():
+                logger.error("SSH connect error: cannot reach %s:%s (low-level TCP connect failed)", self.host, self.port)
+                return False
+        except Exception:
+            # ignore test failure and continue to attempt paramiko connect; paramiko will produce useful logs
+            pass
+
         try:
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -54,7 +75,8 @@ class SCPManager:
             logger.info("Connected to SSH/SFTP: %s:%s", self.host, self.port)
             return True
         except Exception as e:
-            logger.error("SSH connect error: %s", e)
+            # include exception repr for more detail (e.g. [Errno None] Unable to connect to port 22)
+            logger.error("SSH connect error: %r", e)
             self.disconnect()
             return False
 

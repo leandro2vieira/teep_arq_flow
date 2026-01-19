@@ -1,12 +1,15 @@
 from logging_config import configure_logging
 from setup_config import ConfigManager
 from flask import Flask, render_template, request, jsonify, redirect, url_for
+import json
 from werkzeug.serving import make_server
 import logging
 from pathlib import Path
 from threading import Thread
 from queue import Queue
 from models.message import Message
+from scp_manager import SCPManager
+from ftp_manager import FTPManager
 
 configure_logging(app_name="rabbitmq_ftp_service", level="INFO")
 logger = logging.getLogger(__name__)
@@ -166,6 +169,68 @@ class FlaskWebApp:
                 return jsonify({'message': 'Peripheral deleted'})
             except Exception as e:
                 return jsonify({'error': str(e)}), 400
+
+        @self.app.route('/api/peripheral_test_connection', methods=['POST'])
+        def test_peripheral_connection():
+            """Endpoint to test connectivity for a peripheral connection configuration.
+            Accepts JSON with connection params (host, port, user, password, protocol, private_key_path, use_tls, passive, timeout)
+            or a nested 'json_connection_params' field. Returns { success: bool, message: str }.
+            """
+            data = request.get_json() or {}
+            # support multiple shapes: {json_connection_params: {...}} or direct fields
+            conn = data.get('json_connection_params') or data.get('connection') or data
+            # if conn is string, try parse
+            if isinstance(conn, str):
+                try:
+                    conn = json.loads(conn)
+                except Exception:
+                    # treat as error
+                    return jsonify({'success': False, 'message': 'Invalid json_connection_params'}), 400
+
+            host = conn.get('host')
+            port = conn.get('port')
+            user = conn.get('user')
+            password = conn.get('password')
+            protocol = (conn.get('protocol') or conn.get('proto') or 'ftp').lower()
+            timeout = conn.get('timeout') or 10
+            private_key = conn.get('private_key_path') or conn.get('key_filename') or conn.get('private_key')
+            use_tls = bool(conn.get('use_tls'))
+            passive = bool(conn.get('passive', True))
+
+            if not host:
+                return jsonify({'success': False, 'message': 'host is required'}), 400
+            try:
+                port = int(port) if port is not None and str(port) != '' else (22 if protocol in ('sftp', 'scp') else 21)
+            except Exception:
+                return jsonify({'success': False, 'message': 'port must be an integer'}), 400
+
+            # choose manager
+            mgr = None
+            try:
+                if protocol in ('scp', 'sftp'):
+                    mgr = SCPManager(host=host, port=port, user=user or '', password=password or '', timeout=int(timeout or 10))
+                    if private_key:
+                        try:
+                            mgr.key_filename = private_key
+                        except Exception:
+                            pass
+                else:
+                    mgr = FTPManager(host=host, port=port, user=user or 'anonymous', password=password or '', use_tls=use_tls, timeout=int(timeout or 10), passive=passive)
+
+                ok = mgr.connect()
+                if ok:
+                    mgr.disconnect()
+                    return jsonify({'success': True, 'message': 'Connection successful'})
+                else:
+                    return jsonify({'success': False, 'message': 'Connection failed; see server logs for details'}), 200
+            except Exception as e:
+                try:
+                    if mgr:
+                        mgr.disconnect()
+                except Exception:
+                    pass
+                logger.exception("test_peripheral_connection failed: %s", e)
+                return jsonify({'success': False, 'message': str(e)}), 500
 
         @self.app.route('/api/activate_debug/<string:index>', methods=['POST'])
         def activate_debug(index):
@@ -405,4 +470,3 @@ class FlaskWebApp:
         if self.server:
             self.server.shutdown()
             logger.info("Servidor web parado")
-

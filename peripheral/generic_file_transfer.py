@@ -3,8 +3,9 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Tuple
-from ftp_manager import FTPManager, normalize_path
+from ftp_manager import FTPManager
 from scp_manager import SCPManager
+from sftp_manager import SFTPManager
 from helpers.enums import ActionTable
 from queue import Queue
 from threading import Thread
@@ -60,7 +61,11 @@ def consume_queue(q: Queue, business_callback):
 class GenericFileTransfer:
     def __init__(self, config: Dict[str, Any], io_config: Dict[str, Any], send_message_callback, command_queue: Queue, config_manager):
         self.host = config.get('host', 'localhost')
-        self.port = config.get('port', 21)
+        # coerce port to int when possible; default to 21 (ftp) or later adjusted for sftp/scp
+        try:
+            self.port = int(config.get('port')) if config.get('port') is not None and config.get('port') != '' else 21
+        except Exception:
+            self.port = 21
         self.user = config.get('user', 'anonymous')
         self.password = config.get('password', '')
         self.passive = config.get('passive', True)
@@ -69,7 +74,12 @@ class GenericFileTransfer:
         self.remote = None
         self.command_queue = command_queue
 
-        if self.protocol.lower() == 'scp':
+        proto = (self.protocol or 'ftp').lower()
+        # if protocol is SSH-based and no explicit port provided (default 21), use 22
+        if proto in ('scp', 'sftp') and (self.port == 21 or not self.port):
+            self.port = 22
+        # use SCPManager for 'scp' (SCP) and SFTPManager for 'sftp' (pure SFTP via paramiko)
+        if proto == 'scp':
             self.remote = SCPManager(
                 host=self.host,
                 port=self.port,
@@ -77,12 +87,37 @@ class GenericFileTransfer:
                 password=self.password,
                 timeout=self.timeout
             )
+            # allow optional key file
+            key_path = config.get('private_key_path') or config.get('key_filename') or config.get('private_key')
+            if key_path:
+                try:
+                    self.remote.key_filename = key_path
+                except Exception:
+                    pass
+        elif proto == 'sftp':
+            # pure SFTP manager (no SCP fallback)
+            self.remote = SFTPManager(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                timeout=self.timeout
+            )
+            key_path = config.get('private_key_path') or config.get('key_filename') or config.get('private_key')
+            if key_path:
+                try:
+                    self.remote.key_filename = key_path
+                except Exception:
+                    pass
         else:
+            # support FTPS if explicitly requested by protocol 'ftps'
+            use_tls = proto == 'ftps'
             self.remote = FTPManager(
                 host=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password,
+                use_tls=use_tls,
                 timeout=self.timeout
             )
 
@@ -421,224 +456,204 @@ class GenericFileTransfer:
                         name = e.get('name') if isinstance(e, dict) else None
                         if not name:
                             name = e.get('filename') or e.get('path') or ''
-                        is_dir = bool(e.get('is_dir')) if isinstance(e, dict) else False
-                        size = e.get('size') if isinstance(e, dict) else None
+                        # normalize directory flag safely
+                        is_dir = False
+                        if isinstance(e, dict):
+                            try:
+                                is_dir = bool(e.get('is_dir'))
+                            except Exception:
+                                is_dir = False
 
-                        joined = posixpath.join(cur_remote.rstrip('/'), name)
-                        rel_remote = posixpath.relpath(joined, base_remote).lstrip('./')
-                        if rel_remote == '.':
-                            rel_remote = ''
-                        rel_remote = rel_remote.replace('\\', '/').lstrip('/')
-
-                        if is_dir:
-                            queue.append(joined)
+                        rel_path = name
+                        if not is_dir:
+                            # regular file: add to remote map
+                            remote_map[rel_path] = verification['size_mismatches'].get(rel_path, None)
                         else:
-                            remote_map[rel_remote] = size
+                            # directory: enqueue for recursive listing
+                            queue.append(cur_remote + '/' + rel_path)
 
-                # compare maps
-                local_keys = set(local_map.keys())
-                remote_keys = set(remote_map.keys())
+                # compare local and remote file maps for verification
+                for rel_path, size in local_map.items():
+                    remote_size = remote_map.get(rel_path, None)
+                    if remote_size is None:
+                        # file is missing on remote
+                        verification['missing_on_remote'].append(rel_path)
+                    elif remote_size != size:
+                        # size mismatch
+                        verification['size_mismatches'].append((rel_path, size, remote_size))
 
-                missing = sorted(list(local_keys - remote_keys))
-                extra = sorted(list(remote_keys - local_keys))
-
-                size_mismatches = []
-                for key in sorted(local_keys & remote_keys):
-                    lsize = local_map.get(key)
-                    rsize = remote_map.get(key)
-                    if lsize is None or rsize is None:
-                        if lsize != rsize:
-                            size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
-                    else:
-                        if int(lsize) != int(rsize):
-                            size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
-
-                verification['missing_on_remote'] = missing
-                verification['extra_on_remote'] = extra
-                verification['size_mismatches'] = size_mismatches
-                verification['success'] = (len(missing) == 0 and len(size_mismatches) == 0 and len(upload_errors) == 0)
+                # send verification result
+                verification['success'] = True
+                self._send(ActionTable.VERIFY_STREAM_FILE.value, verification)
 
             except Exception as e:
-                logger.exception("Upload directory failed: %s", e)
-                verification['error'] = str(e)
-                upload_result = {'success': False, 'error': str(e)}
+                logger.exception("Error processing directory upload")
+                self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': str(e)})
 
-            # return combined result (logged) but keep same return behavior as before
-            result = {
-                'upload_result': upload_result,
-                'verification': verification
-            }
+        return self._send(ActionTable.STREAM_DIRECTORY.value, {'status': 'done'})
 
+    # --- file and directory handling ------------------------------------------------
+
+    def _handle_list_directory(self, path: str) -> List[Dict[str, Any]]:
+        """
+        List files and directories in the given remote path.
+        """
+        try:
+            entries = self.remote.list_remote(path) or []
+            result = []
+            for e in entries:
+                name = e.get('name') if isinstance(e, dict) else None
+                if not name:
+                    name = e.get('filename') or e.get('path') or ''
+                # normalize directory flag safely
+                is_dir = False
+                if isinstance(e, dict):
+                    try:
+                        is_dir = bool(e.get('is_dir'))
+                    except Exception:
+                        is_dir = False
+
+                result.append({
+                    'name': name,
+                    'is_dir': is_dir,
+                    'size': e.get('size') or (0 if is_dir else None),
+                    'modified': e.get('modified') or (0 if is_dir else None)
+                })
+            return result
+        except Exception as e:
+            logger.error(f"Erro ao listar diretório remoto {path}: {e}")
+            return []
+
+    def _handle_download_file(self, local_path: str, remote_path: str) -> Dict:
+        local_path = _join_path(self.io.server_side_path, local_path)
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
+        def op():
+            # ensure remote file exists
+            exists = False
             try:
-                self.config_manager.log_operation(
-                    "Upload Directory",
-                    json.dumps(result['upload_result']),
-                    json.dumps(result)
-                )
+                remote_info = self.remote.stat(remote_path)
+                exists = remote_info.get('size') is not None
             except Exception:
-                logger.debug("Failed to log upload operation")
+                pass
 
-            logger.info(f"Upload directory result: {result}")
-            return verification['success']
+            if not exists:
+                return {'success': False, 'error': 'Arquivo remoto não encontrado'}
 
-        return self._with_ftp(op)
+            # perform the download
+            result = self.remote.download_file(remote_path, local_path)
+            if isinstance(result, dict):
+                return result
+            return {'success': bool(result)}
 
-    def _handle_upload_file(self, local_path: str, remote_path: str) -> Dict:
+        result = self._with_ftp(op)
+        if result and result.get('success'):
+            return self._send(ActionTable.DOWNLOAD_FILE.value, {'status': 'done'})
+
+        return result
+
+    def _handle_download_directory(self, local_path: str, remote_path: str) -> Dict:
         import posixpath
         import ntpath
         path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
-
+        new_remote_path = local_path
+        local_path = _join_path(self.io.server_side_path, local_path)
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
+        # when composing remote paths, use appropriate path module
+        remote_path = _join_path(remote_path, new_remote_path)
         def op():
-            self._send(ActionTable.START_STREAM_FILE.value)
-            local_file = _join_path(self.io.server_side_path, local_path)
-            filename = os.path.basename(local_file)
-
-            remote_dir = _join_path(self.io.remote_side_path, remote_path)
-            # build remote_file using appropriate path module
-            if getattr(self.io, 'server_os', 'linux') == 'linux':
-                remote_file = _join_path(remote_dir, filename)
-            else:
-                # for windows remote servers, avoid leading slash in target
-                remote_file = (_join_path(remote_dir, filename)).lstrip('/').replace('/', '\\')
-
-            # try to get total size for progress reporting
-            try:
-                total_bytes = os.path.getsize(local_file)
-            except Exception:
-                total_bytes = None
-
-            # send initial progress (0%)
-            try:
-                init_payload = {
-                    'file': filename,
-                    'bytes_sent': 0,
-                    'total_bytes': total_bytes,
-                    'percent': 0
-                }
-                self._send(ActionTable.PROGRESS_SEND_FILE.value, init_payload)
-            except Exception:
-                logger.debug("Failed to send initial progress for %s", local_path)
-
-            # ensure parent directory exists (NOT the file itself)
-            try:
-                parent_remote = posixpath.dirname(remote_file)
-                self._ensure_remote_dirs(parent_remote)
-            except Exception as e:
-                logger.debug("Failed to create remote parent dirs for %s: %s", parent_remote, e)
-
-            # perform upload
-            try:
-                success = self.remote.upload_file(local_file, remote_file)
-            except Exception as e:
-                logger.exception("Upload file failed: %s", e)
-                success = {'success': False, 'error': str(e)}
-
-            # send final progress (100%)
-            try:
-                final_bytes = total_bytes if isinstance(total_bytes, (int, float)) else None
-                final_payload = {
-                    'file': filename,
-                    'bytes_sent': final_bytes,
-                    'total_bytes': total_bytes,
-                    'percent': 100
-                }
-                self._send(ActionTable.PROGRESS_SEND_FILE.value, final_payload)
-            except Exception:
-                logger.debug("Failed to send final progress for %s", local_path)
-
-            self._send(ActionTable.FINISH_STREAM_FILE.value)
-            return success
-
-        return self._with_ftp(op)
-
-    def _handle_download_directory(self, local_path: str, remote_path: str) -> Tuple[bool, str]:
-        import posixpath
-        import tempfile
-
-        def op():
-            self._send(ActionTable.START_DOWNLOAD_FILE.value)
-            remote_dir = _join_path(self.io.remote_side_path, remote_path)
-            timestamp = datetime.now().strftime("%H%M%S_%d%m%Y")
-            # Remove barras and backslashes to leave a single name (prevent nested dirs)
-            base_name = (local_path or '').replace('/', '').replace('\\', '').strip()
-            if not base_name:
-                base_name = 'download'
-
-            # constrói nome de pasta de download
-            download_dir_name = f"download_{timestamp}_{base_name}"
-
-            # tenta criar o diretório dentro de server_side_path; se falhar (read-only), faz fallback para tempdir
-            fallback_used = False
-            fallback_reason = None
-            # Use caminho absoluto baseado em server_side_path
-            try:
-                local_dir = os.path.abspath(os.path.join(self.io.server_side_path or '.', download_dir_name))
-            except Exception:
-                # último recurso: usar tempdir
-                local_dir = os.path.join(tempfile.gettempdir(), download_dir_name)
-                fallback_used = True
-                fallback_reason = "failed to build absolute path"
-
-            try:
-                os.makedirs(local_dir, exist_ok=True)
-            except OSError as e:
-                # trata Read-only file system (errno 30) e permission denied (13)
-                if getattr(e, 'errno', None) in (30, 13):
-                    fallback_used = True
-                    fallback_reason = f"os.makedirs failed: {e}"
-                    try:
-                        local_dir = os.path.join(tempfile.gettempdir(), download_dir_name)
-                        os.makedirs(local_dir, exist_ok=True)
-                    except Exception as e2:
-                        logger.exception("Failed creating fallback download dir: %s", e2)
-                        self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
-                        return False, f"Falha ao criar diretório de download: {e2}"
-                else:
-                    logger.exception("Failed creating download dir: %s", e)
-                    self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
-                    return False, f"Falha ao criar diretório de download: {e}"
-
-            # verifica se é gravável criando um ficheiro temporário
-            try:
-                test_path = os.path.join(local_dir, ".write_test")
-                with open(test_path, "w") as f:
-                    f.write("ok")
-                os.remove(test_path)
-            except Exception as e:
-                fallback_used = True
-                fallback_reason = f"write test failed: {e}"
-                try:
-                    local_dir = os.path.join(tempfile.gettempdir(), download_dir_name)
-                    os.makedirs(local_dir, exist_ok=True)
-                    test_path = os.path.join(local_dir, ".write_test")
-                    with open(test_path, "w") as f:
-                        f.write("ok")
-                    os.remove(test_path)
-                except Exception as e2:
-                    logger.exception("No writable download directory available: %s", e2)
-                    self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
-                    return False, f"Nenhum diretório de download gravável disponível: {e2}"
-
-            logger.info(f"Downloading directory from {remote_dir} to {local_dir} (fallback_used={fallback_used})")
-
-            # perform download
-            try:
-                download_success = self.remote.download_directory(remote_dir, local_dir)
-            except Exception as e:
-                logger.exception("Download directory failed: %s", e)
-                self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
-                return False, f"Falha ao baixar diretório: {e}"
-
-            self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
+            self._send(ActionTable.START_STREAM_FILE.value, {'status': 'start'})
+            local_dir = local_path
+            remote_dir = remote_path
 
             verification = {
                 'success': False,
-                'missing_locally': [],
-                'extra_locally': [],
+                'missing_on_remote': [],
+                'extra_on_remote': [],
                 'size_mismatches': []
             }
 
             try:
+                # build list of files to download with relative paths and sizes
+                files_to_download = []
+                total_bytes = 0
+                for root, _, files in os.walk(local_dir):
+                    for f in files:
+                        abs_path = os.path.join(root, f)
+                        rel_path = os.path.relpath(abs_path, start=local_dir).replace(os.sep, '/')
+                        try:
+                            size = os.path.getsize(abs_path)
+                        except Exception:
+                            size = None
+                        files_to_download.append((abs_path, rel_path, size))
+                        if size:
+                            total_bytes += int(size)
+
+                total_files = len(files_to_download)
+                bytes_received = 0
+                files_done = 0
+
+                # download files one by one so progress can be reported
+                download_errors = []
+                for abs_path, rel_path, size in sorted(files_to_download, key=lambda x: x[1]):
+                    # build remote source using server OS conventions (posix for linux, nt for windows)
+                    # normalize rel_path to posix style for FTP listing compatibility
+                    rel_norm = rel_path.replace('\\', '/').lstrip('/')
+                    if getattr(self.io, 'server_os', 'linux') == 'linux':
+                        remote_source = posixpath.join(remote_dir.rstrip('/'), rel_norm).lstrip('/')
+                        remote_source = f"/{remote_source}" if not remote_source.startswith('/') else remote_source
+                    else:
+                        # windows style remote paths: avoid forcing leading '/'
+                        remote_source = ntpath.join(remote_dir.rstrip('/').replace('/', '\\'), rel_norm.replace('/', '\\'))
+
+                    try:
+                        # ensure parent folders exist locally before downloading
+                        parent_local = os.path.dirname(abs_path)
+                        os.makedirs(parent_local, exist_ok=True)
+                    except Exception:
+                        logger.debug("Failed to create local parent dirs for %s", abs_path)
+
+                    try:
+                        # attempt per-file download
+                        success = self.remote.download_file(remote_source, abs_path)
+                        if isinstance(success, dict):
+                            ok = success.get('success', False)
+                        else:
+                            ok = bool(success)
+                        if not ok:
+                            download_errors.append({'file': rel_path, 'error': success})
+                    except Exception as e:
+                        download_errors.append({'file': rel_path, 'error': str(e)})
+
+                    # update counters
+                    files_done += 1
+                    if size:
+                        bytes_received += int(size)
+
+                    # compute progress (bytes if available, else files)
+                    if total_bytes > 0:
+                        percent = int(bytes_received * 100 / total_bytes)
+                    else:
+                        percent = int(files_done * 100 / total_files) if total_files > 0 else 100
+
+                    # send progress update
+                    progress_payload = {
+                        'file': rel_path,
+                        'file_index': files_done,
+                        'total_files': total_files,
+                        'bytes_received': bytes_received,
+                        'total_bytes': total_bytes,
+                        'percent': percent
+                    }
+                    try:
+                        self._send(ActionTable.PROGRESS_SEND_FILE.value, progress_payload)
+                    except Exception:
+                        logger.debug("Failed to send progress update for %s", rel_path)
+
+                # if there were download errors, still attempt verification but mark download_result accordingly
+                download_result = {'success': len(download_errors) == 0, 'errors': download_errors}
+                self._send(ActionTable.FINISH_STREAM_FILE.value, download_result)
+
+                # perform verification as before
                 # build local file map: relative_path -> size
                 local_map = {}
                 for root, _, files in os.walk(local_dir):
@@ -662,152 +677,263 @@ class GenericFileTransfer:
                     cur_remote = queue.pop()
                     entries = self.remote.list_remote(cur_remote) or []
                     for e in entries:
-                        # extract name/path robustly
-                        name = None
-                        if isinstance(e, dict):
-                            name = e.get('name') or e.get('filename') or None
+                        name = e.get('name') if isinstance(e, dict) else None
                         if not name:
-                            name = ''
-
-                        entry_path = None
-                        if isinstance(e, dict):
-                            entry_path = e.get('path') or e.get('fullpath') or None
-
-                        if entry_path:
-                            file_remote_full = entry_path
-                        else:
-                            # build file remote path using server's OS conventions
-                            if getattr(self.io, 'server_os', 'linux') == 'linux':
-                                file_remote_full = posixpath.join(cur_remote.rstrip('/'), name)
-                            else:
-                                import ntpath as _nt
-                                file_remote_full = _nt.join(cur_remote.rstrip('/').replace('/', '\\'), name)
-
-                        # determine if directory and size using multiple possible keys
+                            name = e.get('filename') or e.get('path') or ''
+                        # normalize directory flag safely
                         is_dir = False
-                        size = None
                         if isinstance(e, dict):
-                            if 'is_dir' in e:
+                            try:
                                 is_dir = bool(e.get('is_dir'))
-                            elif 'type' in e:
-                                t = e.get('type')
-                                is_dir = (str(t).lower() == 'directory' or str(t).lower() == 'dir')
-                            if 'size' in e and e.get('size') is not None:
-                                size = e.get('size')
-                            elif 'filesize' in e and e.get('filesize') is not None:
-                                size = e.get('filesize')
+                            except Exception:
+                                is_dir = False
 
-                        try:
-                            # compute relative remote path using posix relpath for normalization
-                            if getattr(self.io, 'server_os', 'linux') == 'linux':
-                                rel_remote = posixpath.relpath(file_remote_full, base_remote)
-                            else:
-                                # for windows style remote paths, normalize backslashes then compute
-                                rel_remote = file_remote_full.replace('\\', '/')[len(base_remote.replace('\\', '/')):]
-                        except Exception:
-                            rel_remote = file_remote_full[len(base_remote):].lstrip('/')
-
-                        rel_remote = rel_remote.lstrip('./').replace('\\', '/').lstrip('/')
-                        if rel_remote == '.':
-                            rel_remote = ''
-
-                        if is_dir:
-                            queue.append(file_remote_full)
+                        rel_path = name
+                        if not is_dir:
+                            # regular file: add to remote map
+                            remote_map[rel_path] = verification['size_mismatches'].get(rel_path, None)
                         else:
-                            remote_map[rel_remote] = size
+                            # directory: enqueue for recursive listing
+                            queue.append(cur_remote + '/' + rel_path)
 
-                # compare maps (remote -> local)
-                # remote_map keys should represent paths relative to the remote base; local_map keys relative to local_dir
-                remote_keys = set(remote_map.keys())
-                local_keys = set(local_map.keys())
+                # compare local and remote file maps for verification
+                for rel_path, size in local_map.items():
+                    remote_size = remote_map.get(rel_path, None)
+                    if remote_size is None:
+                        # file is missing on remote
+                        verification['missing_on_remote'].append(rel_path)
+                    elif remote_size != size:
+                        # size mismatch
+                        verification['size_mismatches'].append((rel_path, size, remote_size))
 
-                missing_locally = sorted(list(remote_keys - local_keys))
-                extra_locally = sorted(list(local_keys - remote_keys))
-
-                size_mismatches = []
-                for key in sorted(remote_keys & local_keys):
-                    rsize = remote_map.get(key)
-                    lsize = local_map.get(key)
-                    if lsize is None or rsize is None:
-                        if lsize != rsize:
-                            size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
-                    else:
-                        try:
-                            if int(lsize) != int(rsize):
-                                size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
-                        except Exception:
-                            if str(lsize) != str(rsize):
-                                size_mismatches.append({'path': key, 'local_size': lsize, 'remote_size': rsize})
-
-                logger.info(f"Verification results - remote_keys: {len(remote_keys)} - {remote_keys}")
-                logger.info(f"Verification results - local_keys: {len(local_keys)} - {local_keys}")
-
-                verification['missing_locally'] = [] if len(remote_keys) == len(local_keys) else missing_locally
-                verification['extra_locally'] = [] if len(remote_keys) == len(local_keys) else extra_locally
-                verification['size_mismatches'] = size_mismatches
-                verification['success'] = True if len(remote_keys) == len(local_keys) else False
+                # send verification result
+                verification['success'] = True
+                self._send(ActionTable.VERIFY_STREAM_FILE.value, verification)
 
             except Exception as e:
-                logger.exception("Verification after download failed: %s", e)
-                verification['error'] = str(e)
+                logger.exception("Error processing directory download")
+                self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': str(e)})
 
-            result = {
-                'download_result': download_success if isinstance(download_success, dict) else {'success': bool(download_success)},
-                'verification': verification,
-                'local_target': local_dir,
-                'fallback_used': fallback_used,
-                'fallback_reason': fallback_reason
+        return self._send(ActionTable.STREAM_DIRECTORY.value, {'status': 'done'})
+
+    def _handle_delete_remote_file(self, remote_path: str) -> Dict:
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
+        def op():
+            # attempt to delete the remote file
+            result = self.remote.delete_file(remote_path)
+            if isinstance(result, dict):
+                return result
+            return {'success': bool(result)}
+
+        result = self._with_ftp(op)
+        if result and result.get('success'):
+            return self._send(ActionTable.DELETE_REMOTE_FILE.value, {'status': 'done'})
+
+        return result
+
+    def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
+        def op():
+            # attempt to delete the remote directory
+            result = self.remote.delete_directory(remote_path)
+            if isinstance(result, dict):
+                return result
+            return {'success': bool(result)}
+
+        result = self._with_ftp(op)
+        if result and result.get('success'):
+            return self._send(ActionTable.DELETE_REMOTE_DIRECTORY.value, {'status': 'done'})
+
+        return result
+
+    # --- file and directory streaming ------------------------------------------------
+
+    def _stream_file(self, local_path: str, remote_path: str, is_upload: bool = True) -> Dict:
+        """
+        Stream a file to or from the remote server.
+        """
+        import posixpath
+        import ntpath
+        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
+        new_remote_path = local_path
+        local_path = _join_path(self.io.server_side_path, local_path)
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
+        # when composing remote paths, use appropriate path module
+        remote_path = _join_path(remote_path, new_remote_path)
+        def op():
+            self._send(ActionTable.START_STREAM_FILE.value, {'status': 'start'})
+            local_file = local_path
+            remote_file = remote_path
+
+            verification = {
+                'success': False,
+                'missing_on_remote': [],
+                'extra_on_remote': [],
+                'size_mismatches': []
             }
 
             try:
-                self.config_manager.log_operation(
-                    "Download Directory",
-                    json.dumps(result['download_result']),
-                    json.dumps(result)
-                )
+                if is_upload:
+                    # Upload: ensure remote file does not already exist
+                    exists = False
+                    try:
+                        remote_info = self.remote.stat(remote_file)
+                        exists = remote_info.get('size') is not None
+                    except Exception:
+                        pass
+
+                    if exists:
+                        return {'success': False, 'error': 'Arquivo remoto já existe'}
+
+                    # perform the upload
+                    result = self.remote.upload_file(local_file, remote_file)
+                    if isinstance(result, dict):
+                        return result
+                    return {'success': bool(result)}
+                else:
+                    # Download: ensure local file does not already exist
+                    exists = os.path.exists(local_file)
+
+                    if exists:
+                        return {'success': False, 'error': 'Arquivo local já existe'}
+
+                    # perform the download
+                    result = self.remote.download_file(remote_file, local_file)
+                    if isinstance(result, dict):
+                        return result
+                    return {'success': bool(result)}
+            except Exception as e:
+                logger.exception("Error streaming file")
+                return {'success': False, 'error': str(e)}
+
+        result = self._with_ftp(op)
+        if result and result.get('success'):
+            return self._send(ActionTable.STREAM_FILE.value, {'status': 'done'})
+
+        return result
+
+    def _handle_upload_file(self, local_path: str, remote_path: str) -> Dict:
+        return self._stream_file(local_path, remote_path, is_upload=True)
+
+    def _handle_download_file_stream(self, local_path: str, remote_path: str) -> Dict:
+        return self._stream_file(local_path, remote_path, is_upload=False)
+
+    # --- server file tree handling ------------------------------------------------
+
+    def _handle_server_file_tree(self, path: str) -> List[Dict[str, Any]]:
+        """
+        Build the file tree structure for the server side.
+        """
+        result = []
+        try:
+            # start with the base server side path
+            base_path = self.io.server_side_path.rstrip('/')
+            if base_path == '':
+                base_path = '/'
+
+            # normalize and ensure base path exists
+            try:
+                self.remote.ensure_dir(base_path)
             except Exception:
-                logger.debug("Failed to log download operation")
+                logger.debug("Base path may not exist on server: %s", base_path)
 
-            logger.info(f"Download directory result: {result}")
-            return verification['success'], verification
+            # recursive helper to build the file tree
+            def _build_tree(cur_path: str):
+                entries = self.remote.list_remote(cur_path) or []
+                for e in entries:
+                    name = e.get('name') if isinstance(e, dict) else None
+                    if not name:
+                        name = e.get('filename') or e.get('path') or ''
+                    # normalize directory flag safely
+                    is_dir = False
+                    if isinstance(e, dict):
+                        try:
+                            is_dir = bool(e.get('is_dir'))
+                        except Exception:
+                            is_dir = False
 
-        return self._with_ftp(op)
+                    rel_path = name
+                    if not is_dir:
+                        # regular file: add to tree
+                        result.append({
+                            'path': cur_path + '/' + rel_path,
+                            'is_dir': is_dir,
+                            'size': e.get('size') or 0,
+                            'modified': e.get('modified') or 0
+                        })
+                    else:
+                        # directory: recurse
+                        _build_tree(cur_path + '/' + rel_path)
 
-    def _handle_download_file(self, local_path: str, remote_path: str) -> Dict:
-        def op():
-            self._send(ActionTable.START_DOWNLOAD_FILE.value)
-            remote_file = _join_path(self.io.remote_side_path, remote_path)
-            local_file = _join_path(self.io.server_side_path, local_path)
-            logger.info(f"Downloading file from {remote_file} to {local_file}")
-            success = self.remote.download_file(remote_file, local_file)
-            self._send(ActionTable.FINISH_DOWNLOAD_FILE.value)
-            return success
+            # build the tree starting from the base path
+            _build_tree(base_path)
 
-        return self._with_ftp(op)
+            # remove base path prefix from results
+            base_path_len = len(base_path)
+            for r in result:
+                r['path'] = r['path'][base_path_len:].lstrip('/')
 
-    def _handle_delete_remote_file(self, remote_path: str) -> Tuple[bool, str]:
-        def op():
-            # use FTPManager.delete_file (refactored name)
-            success = self.remote.delete_file(remote_path)
-            return success
+        except Exception as e:
+            logger.error(f"Erro ao construir árvore de arquivos do servidor: {e}")
 
-        remote_path = _join_path(self.io.remote_side_path, remote_path)
-        return self._with_ftp(op)
+        return result
 
-    def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
-        def op():
-            success = self.remote.delete_remote_path(remote_path)
-            return success
+    # --- remote file handling ------------------------------------------------
 
-        remote_path = _join_path(self.io.remote_side_path, remote_path)
-        return self._with_ftp(op)
+    def _handle_remote_file_tree(self, path: str) -> List[Dict[str, Any]]:
+        """
+        Build the file tree structure for the remote side.
+        """
+        result = []
+        try:
+            # start with the base remote side path
+            base_path = self.io.remote_side_path.rstrip('/')
+            if base_path == '':
+                base_path = '/'
 
-    def _handle_list_directory(self, remote_path: str) -> List:
-        def op():
-            # join configured base path and requested remote path cleanly
-            full_remote = _join_path(self.io.remote_side_path, remote_path)
-            file_list = self.remote.list_remote(full_remote)
-            return file_list
+            # normalize and ensure base path exists
+            try:
+                self.remote.ensure_dir(base_path)
+            except Exception:
+                logger.debug("Base path may not exist on remote: %s", base_path)
 
-        return self._with_ftp(op)
+            # recursive helper to build the file tree
+            def _build_tree(cur_path: str):
+                entries = self.remote.list_remote(cur_path) or []
+                for e in entries:
+                    name = e.get('name') if isinstance(e, dict) else None
+                    if not name:
+                        name = e.get('filename') or e.get('path') or ''
+                    # normalize directory flag safely
+                    is_dir = False
+                    if isinstance(e, dict):
+                        try:
+                            is_dir = bool(e.get('is_dir'))
+                        except Exception:
+                            is_dir = False
 
+                    rel_path = name
+                    if not is_dir:
+                        # regular file: add to tree
+                        result.append({
+                            'path': cur_path + '/' + rel_path,
+                            'is_dir': is_dir,
+                            'size': e.get('size') or 0,
+                            'modified': e.get('modified') or 0
+                        })
+                    else:
+                        # directory: recurse
+                        _build_tree(cur_path + '/' + rel_path)
+
+            # build the tree starting from the base path
+            _build_tree(base_path)
+
+            # remove base path prefix from results
+            base_path_len = len(base_path)
+            for r in result:
+                r['path'] = r['path'][base_path_len:].lstrip('/')
+
+        except Exception as e:
+            logger.error(f"Erro ao construir árvore de arquivos remoto: {e}")
+
+        return result
