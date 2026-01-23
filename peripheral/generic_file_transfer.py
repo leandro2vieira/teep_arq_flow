@@ -467,7 +467,7 @@ class GenericFileTransfer:
                         rel_path = name
                         if not is_dir:
                             # regular file: add to remote map
-                            remote_map[rel_path] = verification['size_mismatches'].get(rel_path, None)
+                            remote_map[rel_path] = e.get('size')
                         else:
                             # directory: enqueue for recursive listing
                             queue.append(cur_remote + '/' + rel_path)
@@ -693,7 +693,7 @@ class GenericFileTransfer:
                         rel_path = name
                         if not is_dir:
                             # regular file: add to remote map
-                            remote_map[rel_path] = verification['size_mismatches'].get(rel_path, None)
+                            remote_map[rel_path] = e.get('size')
                         else:
                             # directory: enqueue for recursive listing
                             queue.append(cur_remote + '/' + rel_path)

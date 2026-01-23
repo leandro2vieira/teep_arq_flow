@@ -325,3 +325,86 @@ class SFTPManager:
         except Exception as e:
             logger.error('list_remote: unexpected error: %s', e)
         return results
+
+    def delete_directory(self, remote_path: str) -> Dict:
+        """
+        Remove recursivamente `remote_path`. Retorna dict {'success': bool, 'error': str?}.
+        Comportamento:
+        - Se o caminho for um ficheiro, tenta removê-lo.
+        - Se for diretório, remove recursivamente conteúdos e depois o diretório.
+        - Tenta conectar se necessário.
+        """
+        if not remote_path:
+            return {'success': False, 'error': 'empty remote path'}
+
+        if not self.sftp:
+            if not self.connect():
+                return {'success': False, 'error': f'Not connected: {self._last_error or "connect failed"}'}
+
+        path = self._normalize_remote(remote_path)
+
+        def _is_dir_from_attr(attr) -> bool:
+            try:
+                import stat as _stat
+                return _stat.S_ISDIR(getattr(attr, 'st_mode', 0))
+            except Exception:
+                try:
+                    return getattr(attr, 'longname', '').startswith('d')
+                except Exception:
+                    return False
+
+        def _remove_recursive(p: str):
+            try:
+                # try listing attributes to decide file/dir
+                try:
+                    entries = self.sftp.listdir_attr(p)
+                except IOError:
+                    # not a directory (could be file) or doesn't exist
+                    # attempt to remove as file
+                    try:
+                        self.sftp.remove(p)
+                        return {'success': True}
+                    except Exception as e_file:
+                        return {'success': False, 'error': f'remove file failed: {e_file}'}
+                except FileNotFoundError:
+                    return {'success': False, 'error': 'not found'}
+
+                # it's a directory: iterate children
+                for attr in entries:
+                    name = getattr(attr, 'filename', None)
+                    if not name or name in ('.', '..'):
+                        continue
+                    child = f"{p.rstrip('/')}/{name}" if p != '/' else f"/{name}"
+                    try:
+                        if _is_dir_from_attr(attr):
+                            res = _remove_recursive(child)
+                            if not res.get('success', False):
+                                return res
+                            # attempt rmdir of emptied child
+                            try:
+                                self.sftp.rmdir(child)
+                            except Exception:
+                                # ignore rmdir failure here; maybe removed inside recursion
+                                pass
+                        else:
+                            try:
+                                self.sftp.remove(child)
+                            except Exception as e_remove:
+                                return {'success': False, 'error': f'remove child failed: {e_remove}'}
+                    except Exception as e_iter:
+                        return {'success': False, 'error': f'error processing child {child}: {e_iter}'}
+
+                # after children removed, remove this directory
+                try:
+                    self.sftp.rmdir(p)
+                    return {'success': True}
+                except Exception as e_rmdir:
+                    return {'success': False, 'error': f'rmdir failed: {e_rmdir}'}
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+
+        try:
+            return _remove_recursive(path)
+        except Exception as e:
+            logger.exception("delete_directory unexpected error for %s: %s", path, e)
+            return {'success': False, 'error': str(e)}
