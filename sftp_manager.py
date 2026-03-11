@@ -188,7 +188,7 @@ class SFTPManager:
         try:
             os.makedirs(os.path.dirname(local) or '.', exist_ok=True)
             try:
-                self._download_recursive(remote, local)
+                self.sftp.get(remote_path, local_path)
             except Exception:
                 # fallback: try retrieving by basename after checking parent
                 parent = os.path.dirname(remote)
@@ -256,6 +256,7 @@ class SFTPManager:
             return False
 
     def _download_recursive(self, remote_dir: str, local_dir: str):
+        logger.debug("SFTP: _download_recursive %s -> %s", remote_dir, local_dir)
         try:
             for attr in self.sftp.listdir_attr(remote_dir):
                 name = attr.filename
