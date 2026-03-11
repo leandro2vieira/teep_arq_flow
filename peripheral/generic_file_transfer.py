@@ -574,11 +574,7 @@ class GenericFileTransfer:
         # build timestamp string DDMMYYYY_HHMMSS
         timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
 
-        # compose folder name: prefer local_base; if empty, use 'download'
-        if local_base:
-            folder_name = f"{local_base}_{timestamp}_{remote_base}" if remote_base else f"{local_base}_{timestamp}"
-        else:
-            folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
+        folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
 
         # ensure folder_name contains no slashes
         folder_name = folder_name.replace('/', '_').replace('\\', '_')

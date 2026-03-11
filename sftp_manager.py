@@ -2,7 +2,7 @@
 from pathlib import Path
 import os
 import logging
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Tuple, Callable
 import paramiko
 
 logger = logging.getLogger(__name__)
