@@ -349,7 +349,7 @@ class SFTPManager:
                             mtime = getattr(s, 'st_mtime', None) or getattr(s, 'st_atime', None)
                             if is_dir:
                                 size = None
-                            return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None)
+                            return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None), 'stat-variant'
                         except Exception:
                             logger.debug('sftp_manager: stat variant failed for %s', vp)
                             continue
@@ -364,8 +364,8 @@ class SFTPManager:
                         res = _try_stat_variants(full_path)
                         if res is not None:
                             logger.debug('list_remote: used stat for %s', full_path)
-                            is_dir_v, size_v, mtime_v = res
-                            return is_dir_v, size_v, mtime_v, 'stat'
+                            is_dir_v, size_v, mtime_v, source_v = res
+                            return is_dir_v, size_v, mtime_v, source_v
                         # fallback to longname heuristic and listdir probe
                         try:
                             is_dir_guess = getattr(attr, 'longname', '').startswith('d')
@@ -392,8 +392,8 @@ class SFTPManager:
                         res = _try_stat_variants(full_path)
                         if res is not None:
                             logger.debug('list_remote: filled missing metadata via stat for %s', full_path)
-                            is_dir_v, size_v, mtime_v = res
-                            return is_dir_v, size_v, mtime_v, 'stat'
+                            is_dir_v, size_v, mtime_v, source_v = res
+                            return is_dir_v, size_v, mtime_v, source_v
                         # try listdir probe (may indicate directory)
                         try:
                             self.sftp.listdir(full_path)
@@ -414,14 +414,14 @@ class SFTPManager:
                     mtime = st_mtime
                     if is_dir:
                         size = None
-                    return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None)
+                    return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None), 'attr'
 
                 # No attr provided: try stat variants
                 res = _try_stat_variants(full_path)
                 if res is not None:
                     logger.debug('list_remote: stat variants succeeded for %s', full_path)
-                    is_dir_v, size_v, mtime_v = res
-                    return is_dir_v, size_v, mtime_v, 'stat'
+                    is_dir_v, size_v, mtime_v, source_v = res
+                    return is_dir_v, size_v, mtime_v, source_v
 
                 # try listdir to detect directories
                 try:
@@ -451,7 +451,7 @@ class SFTPManager:
 
                 return False, None, None, 'unknown'
             except Exception:
-                return False, None, None
+                return False, None, None, 'error'
 
         def _walk(path: str, depth: int) -> list[Dict[str, Any]]:
             nonlocal seen
