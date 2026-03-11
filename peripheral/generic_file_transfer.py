@@ -196,7 +196,7 @@ class GenericFileTransfer:
                 data = message.get('data', {})
                 value = data.get('value', {})
                 path = value.get('remote_path', '')
-                result = self._handle_list_directory(path)
+                result = self._handle_list_directory(self.io.remote_side_path, path)
                 response['action'] = ActionTable.CLIENT_FILE_TREE.value
             elif action == ActionTable.STREAM_DIRECTORY.value:
                 data = message.get('data', {})
@@ -448,15 +448,15 @@ class GenericFileTransfer:
                 if base_remote == '':
                     base_remote = '/'
 
-                queue = [base_remote]
-                while queue:
-                    cur_remote = queue.pop()
+                # traverse remote tree and collect files using same relative-key scheme used when building files_to_download
+                queue_remote = [(base_remote, '')]
+                while queue_remote:
+                    cur_remote, rel_prefix = queue_remote.pop()
                     entries = self.remote.list_remote(cur_remote) or []
                     for e in entries:
                         name = e.get('name') if isinstance(e, dict) else None
                         if not name:
                             name = e.get('filename') or e.get('path') or ''
-                        # normalize directory flag safely
                         is_dir = False
                         if isinstance(e, dict):
                             try:
@@ -464,13 +464,17 @@ class GenericFileTransfer:
                             except Exception:
                                 is_dir = False
 
-                        rel_path = name
-                        if not is_dir:
-                            # regular file: add to remote map
-                            remote_map[rel_path] = e.get('size')
+                        child_rel = f"{rel_prefix}/{name}".lstrip('/') if rel_prefix else name
+
+                        if is_dir:
+                            child_remote = posixpath.join(cur_remote.rstrip('/'), name) if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath.join(cur_remote.rstrip('/').replace('/', '\\'), name.replace('/', '\\'))
+                            queue_remote.append((child_remote, child_rel))
                         else:
-                            # directory: enqueue for recursive listing
-                            queue.append(cur_remote + '/' + rel_path)
+                            # regular file: add to remote map keyed by relative path
+                            try:
+                                remote_map[child_rel] = e.get('size')
+                            except Exception:
+                                remote_map[child_rel] = None
 
                 # compare local and remote file maps for verification
                 for rel_path, size in local_map.items():
@@ -496,12 +500,13 @@ class GenericFileTransfer:
 
     # --- file and directory handling ------------------------------------------------
 
-    def _handle_list_directory(self, path: str) -> List[Dict[str, Any]]:
+    def _handle_list_directory(self, remote_path: str, path: str) -> List[Dict[str, Any]]:
         """
         List files and directories in the given remote path.
         """
         try:
-            entries = self.remote.list_remote(path) or []
+            _remote_path = _join_path(remote_path, path)
+            entries = self.remote.list_remote(_remote_path) or []
             result = []
             for e in entries:
                 name = e.get('name') if isinstance(e, dict) else None
@@ -557,11 +562,34 @@ class GenericFileTransfer:
         import posixpath
         import ntpath
         path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
-        new_remote_path = local_path
-        local_path = _join_path(self.io.server_side_path, local_path)
+
+        # preserve original inputs (passed by caller) to derive safe folder names
+        original_local_input = (local_path or '').rstrip('/\\')
+        original_remote_input = (remote_path or '').rstrip('/\\')
+
+        # compute safe base names (remove any path separators so we get a single name)
+        local_base = os.path.basename(original_local_input) if original_local_input else ''
+        remote_base = os.path.basename(original_remote_input.replace('\\', '/')) if original_remote_input else ''
+
+        # build timestamp string DDMMYYYY_HHMMSS
+        timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
+
+        # compose folder name: prefer local_base; if empty, use 'download'
+        if local_base:
+            folder_name = f"{local_base}_{timestamp}_{remote_base}" if remote_base else f"{local_base}_{timestamp}"
+        else:
+            folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
+
+        # ensure folder_name contains no slashes
+        folder_name = folder_name.replace('/', '_').replace('\\', '_')
+
+        # final local_path is server_side_path joined with the composed folder_name
+        local_path = os.path.join(self.io.server_side_path.rstrip('/\\'), folder_name)
+        print(f"Local path to save: {local_path}", flush=True)
+
         remote_path = _join_path(self.io.remote_side_path, remote_path)
-        # when composing remote paths, use appropriate path module
-        remote_path = _join_path(remote_path, new_remote_path)
+        print(f"Remote path to download: {remote_path}", flush=True)
+
         def op():
             self._send(ActionTable.START_STREAM_FILE.value, {'status': 'start'})
             local_dir = local_path
@@ -575,20 +603,48 @@ class GenericFileTransfer:
             }
 
             try:
-                # build list of files to download with relative paths and sizes
+                # build list of files to download by traversing the remote_dir
                 files_to_download = []
                 total_bytes = 0
-                for root, _, files in os.walk(local_dir):
-                    for f in files:
-                        abs_path = os.path.join(root, f)
-                        rel_path = os.path.relpath(abs_path, start=local_dir).replace(os.sep, '/')
-                        try:
-                            size = os.path.getsize(abs_path)
-                        except Exception:
+                # queue entries are tuples (remote_path, rel_prefix)
+                queue_remote = [(remote_dir.rstrip('/') if remote_dir else '/', '')]
+                while queue_remote:
+                    cur_remote, rel_prefix = queue_remote.pop()
+                    entries = self.remote.list_remote(cur_remote) or []
+                    for e in entries:
+                        name = e.get('name') if isinstance(e, dict) else None
+                        if not name:
+                            name = e.get('filename') or e.get('path') or ''
+                        # normalize directory flag safely
+                        is_dir = False
+                        if isinstance(e, dict):
+                            try:
+                                is_dir = bool(e.get('is_dir'))
+                            except Exception:
+                                is_dir = False
+
+                        # build relative path under the base remote_dir
+                        child_rel = f"{rel_prefix}/{name}".lstrip('/') if rel_prefix else name
+
+                        if is_dir:
+                            # compute child remote path and enqueue
+                            child_remote = posixpath.join(cur_remote.rstrip('/'), name) if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath.join(cur_remote.rstrip('/').replace('/', '\\'), name.replace('/', '\\'))
+                            queue_remote.append((child_remote, child_rel))
+                        else:
+                            # file: prepare the local absolute path and collect size from remote listing if available
                             size = None
-                        files_to_download.append((abs_path, rel_path, size))
-                        if size:
-                            total_bytes += int(size)
+                            if isinstance(e, dict):
+                                try:
+                                    size = e.get('size')
+                                except Exception:
+                                    size = None
+                            local_abs = os.path.join(local_dir, child_rel.replace('/', os.sep))
+                            files_to_download.append((local_abs, child_rel, size))
+                            if size:
+                                try:
+                                    total_bytes += int(size)
+                                except Exception:
+                                    pass
 
                 total_files = len(files_to_download)
                 bytes_received = 0
@@ -674,15 +730,15 @@ class GenericFileTransfer:
                 if base_remote == '':
                     base_remote = '/'
 
-                queue = [base_remote]
-                while queue:
-                    cur_remote = queue.pop()
+                # traverse remote tree and collect files using same relative-key scheme used when building files_to_download
+                queue_remote = [(base_remote, '')]
+                while queue_remote:
+                    cur_remote, rel_prefix = queue_remote.pop()
                     entries = self.remote.list_remote(cur_remote) or []
                     for e in entries:
                         name = e.get('name') if isinstance(e, dict) else None
                         if not name:
                             name = e.get('filename') or e.get('path') or ''
-                        # normalize directory flag safely
                         is_dir = False
                         if isinstance(e, dict):
                             try:
@@ -690,13 +746,17 @@ class GenericFileTransfer:
                             except Exception:
                                 is_dir = False
 
-                        rel_path = name
-                        if not is_dir:
-                            # regular file: add to remote map
-                            remote_map[rel_path] = e.get('size')
+                        child_rel = f"{rel_prefix}/{name}".lstrip('/') if rel_prefix else name
+
+                        if is_dir:
+                            child_remote = posixpath.join(cur_remote.rstrip('/'), name) if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath.join(cur_remote.rstrip('/').replace('/', '\\'), name.replace('/', '\\'))
+                            queue_remote.append((child_remote, child_rel))
                         else:
-                            # directory: enqueue for recursive listing
-                            queue.append(cur_remote + '/' + rel_path)
+                            # regular file: add to remote map keyed by relative path
+                            try:
+                                remote_map[child_rel] = e.get('size')
+                            except Exception:
+                                remote_map[child_rel] = None
 
                 # compare local and remote file maps for verification
                 for rel_path, size in local_map.items():
@@ -710,13 +770,19 @@ class GenericFileTransfer:
 
                 # send verification result
                 verification['success'] = True
-                self._send(ActionTable.VERIFY_STREAM_FILE.value, verification)
+
+                return verification
 
             except Exception as e:
                 logger.exception("Error processing directory download")
-                self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': str(e)})
+                self._send(ActionTable.DOWNLOAD_FILE.value, {'success': False, 'error': str(e)})
+                return verification
 
-        return self._send(ActionTable.STREAM_DIRECTORY.value, {'status': 'done'})
+        result = self._with_ftp(op)
+        if result and result.get('success'):
+            return self._send(ActionTable.DOWNLOAD_FILE.value, {'status': 'done'})
+
+        return result
 
     def _handle_delete_remote_file(self, remote_path: str) -> Dict:
         remote_path = _join_path(self.io.remote_side_path, remote_path)
@@ -736,8 +802,28 @@ class GenericFileTransfer:
     def _handle_delete_remote_directory(self, remote_path: str) -> Dict:
         remote_path = _join_path(self.io.remote_side_path, remote_path)
         def op():
-            # attempt to delete the remote directory
-            result = self.remote.delete_directory(remote_path)
+            # attempt to delete the remote directory and report progress
+            def progress_cb(info: Dict[str, Any]):
+                # info contains 'path', 'type', 'status', optional 'error'
+                try:
+                    payload = {
+                        'path': info.get('path', ''),
+                        'type': info.get('type', ''),
+                        'status': info.get('status', ''),
+                        'error': info.get('error', None)
+                    }
+                    # keep compatibility with existing progress payload shape used elsewhere
+                    progress_payload = {
+                        'file': payload['path'],
+                        'file_type': payload['type'],
+                        'status': payload['status'],
+                        'error': payload['error']
+                    }
+                    self._send(ActionTable.PROGRESS_SEND_FILE.value, progress_payload)
+                except Exception:
+                    logger.debug("Failed to send delete progress for %s", info)
+
+            result = self.remote.delete_directory(remote_path, progress_cb=progress_cb)
             if isinstance(result, dict):
                 return result
             return {'success': bool(result)}

@@ -4,7 +4,7 @@ import re
 import logging
 from ftplib import FTP, FTP_TLS
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -80,6 +80,18 @@ class FTPManager:
         if self.ftp:
             return True
         return self.connect()
+
+    def _reconnect(self) -> bool:
+        """Force a fresh FTP connection for each operation."""
+        try:
+            try:
+                self.disconnect()
+            except Exception:
+                pass
+            return self.connect()
+        except Exception as e:
+            logger.debug("_reconnect failed: %s", e)
+            return False
 
     @contextmanager
     def _cwd(self, path: str):
@@ -157,7 +169,8 @@ class FTPManager:
                 pass
 
     def upload_file(self, local_path: str, remote_path: str):
-        if not self._ensure_connected():
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return {'success': False, 'error': 'Not connected'}
 
         remote = normalize_path(remote_path or '')
@@ -214,8 +227,10 @@ class FTPManager:
             return {'success': False, 'error': str(e)}
 
     def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, str]:
-        if not self._ensure_connected():
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return False, "FTP not connected"
+
         remote = normalize_path(remote_path)
         local = normalize_path(local_path)
         try:
@@ -236,8 +251,10 @@ class FTPManager:
             return False, f"download_file error: {e}"
 
     def upload_directory(self, local_dir: str, remote_dir: str) -> bool:
-        if not self._ensure_connected():
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return False
+
         try:
             base = Path(local_dir)
             remote_base = normalize_path(remote_dir or '')
@@ -261,8 +278,10 @@ class FTPManager:
             return False
 
     def list_remote(self, remote_dir: str = '.', include_hidden: bool = False) -> List[Dict[str, Any]]:
-        if not self._ensure_connected():
+        # ensure fresh connection for each listing
+        if not self._reconnect():
             return []
+
         remote_dir = normalize_path(remote_dir or '.')
         results: List[Dict[str, Any]] = []
 
@@ -426,7 +445,8 @@ class FTPManager:
             return False
 
     def download_directory(self, remote_dir: str, local_dir: str) -> bool:
-        if not self._ensure_connected():
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return False
         try:
             return self._download_recursive(remote_dir, local_dir)
@@ -435,7 +455,8 @@ class FTPManager:
             return False
     
     def delete_file(self, remote_path: str) -> Tuple[bool, str]:
-        if not self._ensure_connected():
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return False, "FTP not connected"
         remote = normalize_path(remote_path or '')
         if not remote:
@@ -470,49 +491,78 @@ class FTPManager:
             logger.exception("delete_file error: %s", e)
             return False, str(e)
 
-    def delete_remote_path(self, remote_path: str) -> Tuple[bool, str]:
-        if not self._ensure_connected():
-            return False, "FTP not connected"
-        remote = normalize_path(remote_path or '')
-        if not remote or remote == '/':
-            logger.error("delete_remote_path: invalid path %s", remote)
-            return False, "invalid path"
-        try:
-            # try as file first
-            ok, msg = self.delete_file(remote)
-            if ok:
-                return True, msg
-            # list children and remove recursively
-            children = self.list_remote(remote, include_hidden=True)
-            for c in children:
-                path = c.get('path') or ''
-                if not path:
-                    continue
-                if c.get('type') == 'file':
-                    ok, msg = self.delete_file(path)
-                    if not ok:
-                        logger.warning("Failed to delete file %s: %s", path, msg)
-                else:
-                    if not self.delete_remote_path(path)[0]:
-                        logger.warning("Failed to delete directory %s", path)
-            # remove the directory itself
+    def delete_directory(self, remote_path: str, progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None) -> Tuple[bool, str]:
+        # ensure fresh connection for each operation
+        def _default_progress(_info: Dict[str, Any]):
+            # placeholder
+            return
+
+        # New signature supports optional progress callback
+        # progress_cb(info: Dict) where info contains path, type ('file'|'directory'), status, error(optional)
+        def _inner_delete(remote_path_inner: str, progress_cb: Callable[[Dict[str, Any]], None] = None) -> Tuple[bool, str]:
+            if not self._reconnect():
+                return False, "FTP not connected"
+            remote = normalize_path(remote_path_inner or '')
+            if not remote or remote == '/':
+                logger.error("delete_directory: invalid path %s", remote)
+                return False, "invalid path"
             try:
-                self.ftp.rmd(remote)
-                logger.info("Removed remote directory: %s", remote)
-                return True, "directory removed"
-            except Exception:
-                parent = os.path.dirname(remote)
-                base = os.path.basename(remote)
-                if not base:
-                    return False, "invalid directory name"
+                # try as file first
+                ok, msg = self.delete_file(remote)
+                if ok:
+                    if progress_cb:
+                        progress_cb({'path': remote, 'type': 'file', 'status': 'deleted'})
+                    return True, msg
+                # list children and remove recursively
+                children = self.list_remote(remote, include_hidden=True)
+                for c in children:
+                    path = c.get('path') or ''
+                    if not path:
+                        continue
+                    if c.get('type') == 'file':
+                        if progress_cb:
+                            progress_cb({'path': path, 'type': 'file', 'status': 'deleting'})
+                        ok, msg = self.delete_file(path)
+                        if ok:
+                            if progress_cb:
+                                progress_cb({'path': path, 'type': 'file', 'status': 'deleted'})
+                        else:
+                            logger.warning("Failed to delete file %s: %s", path, msg)
+                            if progress_cb:
+                                progress_cb({'path': path, 'type': 'file', 'status': 'error', 'error': msg})
+                    else:
+                        if progress_cb:
+                            progress_cb({'path': path, 'type': 'directory', 'status': 'deleting'})
+                        res = _inner_delete(path, progress_cb)
+                        if not res[0]:
+                            logger.warning("Failed to delete directory %s", path)
+                            if progress_cb:
+                                progress_cb({'path': path, 'type': 'directory', 'status': 'error', 'error': res[1]})
+                # remove the directory itself
                 try:
-                    with self._cwd(parent):
-                        self.ftp.rmd(base)
-                    logger.info("Removed remote directory %s via cwd %s", base, parent)
+                    self.ftp.rmd(remote)
+                    logger.info("Removed remote directory: %s", remote)
+                    if progress_cb:
+                        progress_cb({'path': remote, 'type': 'directory', 'status': 'deleted'})
                     return True, "directory removed"
-                except Exception as e:
-                    logger.error("Failed to remove directory %s via cwd %s: %s", base, parent, e)
-                    return False, "failed to remove directory"
-        except Exception as e:
-            logger.error("delete_remote_path error: %s", e)
-            return False, f"error occurred: {e}"
+                except Exception:
+                    parent = os.path.dirname(remote)
+                    base = os.path.basename(remote)
+                    if not base:
+                        return False, "invalid directory name"
+                    try:
+                        with self._cwd(parent):
+                            self.ftp.rmd(base)
+                        logger.info("Removed remote directory %s via cwd %s", base, parent)
+                        if progress_cb:
+                            progress_cb({'path': remote, 'type': 'directory', 'status': 'deleted'})
+                        return True, "directory removed"
+                    except Exception as e:
+                        logger.error("Failed to remove directory %s via cwd %s: %s", base, parent, e)
+                        return False, "failed to remove directory"
+            except Exception as e:
+                logger.error("delete_directory error: %s", e)
+                return False, f"error occurred: {e}"
+
+        # expose function with optional callback parameter by forwarding to inner implementation
+        return _inner_delete(remote_path, progress_cb)

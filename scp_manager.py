@@ -2,7 +2,7 @@
 from pathlib import Path
 import os
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Callable
 
 import paramiko
 
@@ -26,9 +26,9 @@ class SCPManager:
         self.timeout = timeout
         self.key_filename = None  # optional path to private key
         self.timeout = timeout
-        self.ssh: paramiko.SSHClient | None = None
-        self.sftp: paramiko.SFTPClient | None = None
-        self.scp: SCPClient | None = None
+        self.ssh: Optional[paramiko.SSHClient] = None
+        self.sftp: Optional[paramiko.SFTPClient] = None
+        self.scp: Optional[SCPClient] = None
 
     def test_socket_connect(self) -> bool:
         """Quick check if TCP connect to host:port is possible (helps differentiate network vs SSH errors)."""
@@ -165,6 +165,93 @@ class SCPManager:
         except Exception as e:
             logger.error("download_directory error: %s", e)
             return False
+
+    def delete_directory(self, remote_path: str, progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+        """Recursively delete `remote_path` using SFTP. Reports progress via progress_cb(info).
+
+        Returns: {'success': bool, 'error': str?}
+        """
+        if not remote_path:
+            return {'success': False, 'error': 'empty remote path'}
+
+        # ensure connection
+        if not self.sftp or not self.ssh:
+            if not self.connect():
+                return {'success': False, 'error': 'not connected'}
+
+        path = remote_path
+
+        def _is_dir_attr(a):
+            try:
+                import stat as _stat
+                return _stat.S_ISDIR(getattr(a, 'st_mode', 0))
+            except Exception:
+                try:
+                    return getattr(a, 'longname', '').startswith('d')
+                except Exception:
+                    return False
+
+        def _remove_recursive(p: str):
+            try:
+                try:
+                    entries = self.sftp.listdir_attr(p)
+                except IOError:
+                    # not a directory: try remove file
+                    try:
+                        self.sftp.remove(p)
+                        if progress_cb:
+                            progress_cb({'path': p, 'type': 'file', 'status': 'deleted'})
+                        return {'success': True}
+                    except Exception as e_file:
+                        return {'success': False, 'error': str(e_file)}
+                except FileNotFoundError:
+                    return {'success': False, 'error': 'not found'}
+
+                for attr in entries:
+                    name = getattr(attr, 'filename', None)
+                    if not name or name in ('.', '..'):
+                        continue
+                    child = f"{p.rstrip('/')}/{name}" if p != '/' else f"/{name}"
+                    if _is_dir_attr(attr):
+                        if progress_cb:
+                            progress_cb({'path': child, 'type': 'directory', 'status': 'deleting'})
+                        res = _remove_recursive(child)
+                        if not res.get('success', False):
+                            if progress_cb:
+                                progress_cb({'path': child, 'type': 'directory', 'status': 'error', 'error': res.get('error')})
+                            return res
+                        try:
+                            self.sftp.rmdir(child)
+                            if progress_cb:
+                                progress_cb({'path': child, 'type': 'directory', 'status': 'deleted'})
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            if progress_cb:
+                                progress_cb({'path': child, 'type': 'file', 'status': 'deleting'})
+                            self.sftp.remove(child)
+                            if progress_cb:
+                                progress_cb({'path': child, 'type': 'file', 'status': 'deleted'})
+                        except Exception as e_remove:
+                            if progress_cb:
+                                progress_cb({'path': child, 'type': 'file', 'status': 'error', 'error': str(e_remove)})
+                            return {'success': False, 'error': str(e_remove)}
+
+                # remove directory itself
+                try:
+                    self.sftp.rmdir(p)
+                    return {'success': True}
+                except Exception as e_rmdir:
+                    return {'success': False, 'error': str(e_rmdir)}
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+
+        try:
+            return _remove_recursive(path)
+        except Exception as e:
+            logger.exception("delete_directory unexpected error: %s", e)
+            return {'success': False, 'error': str(e)}
 
     def _mkdir_remote_recursive(self, remote_path: str):
         # create remote directories recursively using SFTP

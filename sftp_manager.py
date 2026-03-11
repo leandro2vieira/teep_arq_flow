@@ -2,7 +2,7 @@
 from pathlib import Path
 import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 import paramiko
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,19 @@ class SFTPManager:
                 pass
             return False
 
+    def _reconnect(self) -> bool:
+        """Force a fresh connection: disconnect any existing session and connect anew."""
+        try:
+            # Always try to close prior connections to ensure a fresh session
+            try:
+                self.disconnect()
+            except Exception:
+                pass
+            return self.connect()
+        except Exception as e:
+            logger.debug("_reconnect failed: %s", e)
+            return False
+
     def disconnect(self) -> None:
         try:
             if self.sftp:
@@ -127,8 +140,9 @@ class SFTPManager:
 
     # Make upload_file return dict similar to FTPManager.upload_file
     def upload_file(self, local_path: str, remote_path: str) -> bool:
-        if not self.sftp:
-            return {'success': False, 'error': 'Not connected'}
+        # ensure fresh connection for each operation
+        if not self._reconnect():
+            return {'success': False, 'error': f'Not connected: {self._last_error or "reconnect failed"}'}
         remote = self._normalize_remote(remote_path)
         if not remote:
             logger.error("upload_file: empty remote path")
@@ -166,8 +180,9 @@ class SFTPManager:
 
     def download_file(self, remote_path: str, local_path: str) -> bool:
         # Return signature similar to FTPManager.download_file: (bool, message)
-        if not self.sftp:
-            return False, "Not connected"
+        # ensure fresh connection for each operation
+        if not self._reconnect():
+            return False, f"Not connected: {self._last_error or 'reconnect failed'}"
         remote = self._normalize_remote(remote_path)
         local = local_path
         try:
@@ -192,7 +207,8 @@ class SFTPManager:
             return False, f"download_file error: {e}"
 
     def upload_directory(self, local_dir: str, remote_dir: str) -> bool:
-        if not self.sftp:
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return False
         try:
             logger.info("SFTP: uploading directory %s -> %s", local_dir, remote_dir)
@@ -227,7 +243,8 @@ class SFTPManager:
             return False
 
     def download_directory(self, remote_dir: str, local_dir: str) -> bool:
-        if not self.sftp:
+        # ensure fresh connection for each operation
+        if not self._reconnect():
             return False
         try:
             os.makedirs(local_dir, exist_ok=True)
@@ -281,14 +298,161 @@ class SFTPManager:
 
     def list_remote(self, remote_path: str = '.', recursive: bool = False, max_depth: int = 3, max_entries: int = 1000) -> list[Dict[str, Any]]:
         results: list[Dict[str, Any]] = []
-        if not remote_path:
-            remote_path = '.'
-        if not self.sftp:
-            if not self.connect():
-                # include last error if available to aid troubleshooting
-                logger.error('list_remote: not connected and connect() failed: %s', self._last_error or 'no details')
-                return results
+        # normalize incoming path
+        remote_path = remote_path or '.'
+        remote_path = self._normalize_remote(remote_path)
+
+        # ensure fresh connection for each listing
+        if not self._reconnect():
+            logger.error('list_remote: not connected and reconnect() failed: %s', self._last_error or 'no details')
+            return results
+
         seen = 0
+
+        def _is_dir_and_size(full_path: str, attr=None):
+            """Return tuple (is_dir: bool, size: Optional[int], modified: Optional[int], source: str).
+               source indicates where metadata was obtained: 'attr','stat','stat-variant','listdir','parent-attr','heuristic'.
+            """
+            try:
+                import stat as _stat
+
+                def _attr_vals(a):
+                    try:
+                        st_mode = getattr(a, 'st_mode', None)
+                    except Exception:
+                        st_mode = None
+                    try:
+                        st_size = getattr(a, 'st_size', None)
+                    except Exception:
+                        st_size = None
+                    try:
+                        st_mtime = getattr(a, 'st_mtime', None) or getattr(a, 'st_atime', None)
+                    except Exception:
+                        st_mtime = None
+                    return st_mode, st_size, st_mtime
+
+                def _try_stat_variants(p):
+                    # attempt several variants: as-is, lstrip('/'), and with leading '/'
+                    variants = [p, p.lstrip('/'), '/' + p.lstrip('/')]
+                    for vp in variants:
+                        try:
+                            # prefer lstat first to respect symlinks
+                            try:
+                                s = self.sftp.lstat(vp)
+                            except Exception:
+                                s = self.sftp.stat(vp)
+                            try:
+                                is_dir = _stat.S_ISDIR(getattr(s, 'st_mode', 0))
+                            except Exception:
+                                is_dir = False
+                            size = getattr(s, 'st_size', None)
+                            mtime = getattr(s, 'st_mtime', None) or getattr(s, 'st_atime', None)
+                            if is_dir:
+                                size = None
+                            return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None)
+                        except Exception:
+                            logger.debug('sftp_manager: stat variant failed for %s', vp)
+                            continue
+                    return None
+
+                if attr is not None:
+                    st_mode, st_size, st_mtime = _attr_vals(attr)
+
+                    # if st_mode missing or zero, prefer to stat
+                    if st_mode is None or int(st_mode) == 0:
+                        # try to stat using variants
+                        res = _try_stat_variants(full_path)
+                        if res is not None:
+                            logger.debug('list_remote: used stat for %s', full_path)
+                            is_dir_v, size_v, mtime_v = res
+                            return is_dir_v, size_v, mtime_v, 'stat'
+                        # fallback to longname heuristic and listdir probe
+                        try:
+                            is_dir_guess = getattr(attr, 'longname', '').startswith('d')
+                        except Exception:
+                            is_dir_guess = False
+                        try:
+                            # try listdir to see if it's a directory
+                            self.sftp.listdir(full_path)
+                            logger.debug('list_remote: listdir probe succeeded (dir) for %s', full_path)
+                            return True, None, None, 'listdir'
+                        except Exception:
+                            pass
+                        size = st_size
+                        logger.debug('list_remote: using attr heuristic for %s (is_dir_guess=%s)', full_path, is_dir_guess)
+                        return bool(is_dir_guess), (int(size) if size is not None else None), (int(st_mtime) if st_mtime is not None else None), 'heuristic'
+
+                    # st_mode present: use it, but stat if metadata missing
+                    try:
+                        is_dir = _stat.S_ISDIR(int(st_mode))
+                    except Exception:
+                        is_dir = getattr(attr, 'longname', '').startswith('d') if hasattr(attr, 'longname') else False
+
+                    if st_size is None or (st_mtime is None):
+                        res = _try_stat_variants(full_path)
+                        if res is not None:
+                            logger.debug('list_remote: filled missing metadata via stat for %s', full_path)
+                            is_dir_v, size_v, mtime_v = res
+                            return is_dir_v, size_v, mtime_v, 'stat'
+                        # try listdir probe (may indicate directory)
+                        try:
+                            self.sftp.listdir(full_path)
+                            logger.debug('list_remote: listdir probe indicates directory for %s', full_path)
+                            return True, None, None, 'listdir'
+                        except Exception:
+                            pass
+                        # if stat failed, use attr best-effort
+                        size = st_size
+                        mtime = st_mtime
+                        if is_dir:
+                            size = None
+                        logger.debug('list_remote: using attr values for %s', full_path)
+                        return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None), 'attr'
+
+                    # all good from attr
+                    size = st_size
+                    mtime = st_mtime
+                    if is_dir:
+                        size = None
+                    return bool(is_dir), (int(size) if size is not None else None), (int(mtime) if mtime is not None else None)
+
+                # No attr provided: try stat variants
+                res = _try_stat_variants(full_path)
+                if res is not None:
+                    logger.debug('list_remote: stat variants succeeded for %s', full_path)
+                    is_dir_v, size_v, mtime_v = res
+                    return is_dir_v, size_v, mtime_v, 'stat'
+
+                # try listdir to detect directories
+                try:
+                    self.sftp.listdir(full_path)
+                    logger.debug('list_remote: listdir probe success (dir) for %s', full_path)
+                    return True, None, None, 'listdir'
+                except Exception:
+                    pass
+
+                # As a last resort, attempt to list parent and find matching entry to extract metadata
+                try:
+                    parent = os.path.dirname(full_path) or '.'
+                    entries = self.sftp.listdir_attr(parent)
+                    for a in entries:
+                        if getattr(a, 'filename', None) == os.path.basename(full_path):
+                            st_mode, st_size, st_mtime = _attr_vals(a)
+                            try:
+                                is_dir = _stat.S_ISDIR(int(st_mode)) if st_mode is not None else getattr(a, 'longname', '').startswith('d')
+                            except Exception:
+                                is_dir = getattr(a, 'longname', '').startswith('d') if hasattr(a, 'longname') else False
+                            if is_dir:
+                                st_size = None
+                            logger.debug('list_remote: parent attr used for %s', full_path)
+                            return bool(is_dir), (int(st_size) if st_size is not None else None), (int(st_mtime) if st_mtime is not None else None), 'parent-attr'
+                except Exception:
+                    pass
+
+                return False, None, None, 'unknown'
+            except Exception:
+                return False, None, None
+
         def _walk(path: str, depth: int) -> list[Dict[str, Any]]:
             nonlocal seen
             entries: list[Dict[str, Any]] = []
@@ -297,36 +461,61 @@ class SFTPManager:
             try:
                 attrs = self.sftp.listdir_attr(path)
             except FileNotFoundError:
-                logger.error('list_remote: remote path not found: %s', path)
+                logger.debug('list_remote: remote path not found: %s', path)
                 return entries
             except Exception as e:
                 logger.error('list_remote: error listing %s: %s', path, e)
                 return entries
+
             for attr in attrs:
                 if seen >= max_entries:
                     break
                 name = getattr(attr, 'filename', None)
                 if not name or name in ('.', '..'):
                     continue
+
+                # build a normalized full path
+                if path in ('', '.', '/'):
+                    full = f"/{name}" if path == '/' else name
+                else:
+                    full = f"{path.rstrip('/')}/{name}"
+
+                # normalize full remote path to a consistent form before stat/listing
                 try:
-                    import stat as _stat
-                    is_dir = _stat.S_ISDIR(attr.st_mode)
+                    full = self._normalize_remote(full)
                 except Exception:
-                    is_dir = getattr(attr, 'longname', '').startswith('d') if hasattr(attr, 'longname') else False
-                item_path = f"{path.rstrip('/')}/{name}" if path != '/' else f"/{name}"
-                item: Dict[str, Any] = {"name": name, "path": item_path, "is_dir": bool(is_dir), "size": getattr(attr, 'st_size', None)}
+                    # fallback to raw full
+                    pass
+
+                # determine directory flag, size and modification time (prefer attr but verify via stat if ambiguous)
+                is_dir, size, modified, meta_source = _is_dir_and_size(full, attr=attr)
+
+                # Prepare both 'type' and 'mtime' to be compatible with other managers
+                typ = 'directory' if is_dir else 'file'
+                mtime_iso = None
+                if modified is not None:
+                    try:
+                        # convert epoch to ISO 8601 string
+                        import datetime as _dt
+                        mtime_iso = _dt.datetime.utcfromtimestamp(int(modified)).isoformat()
+                    except Exception:
+                        mtime_iso = None
+
+                item: Dict[str, Any] = {"name": name, "path": full, "type": typ, "is_dir": is_dir, "size": size, "modified": modified, 'mtime': mtime_iso, 'meta_source': meta_source}
                 if is_dir and recursive and depth < max_depth:
-                    item['children'] = _walk(item_path, depth + 1)
+                    item['children'] = _walk(full, depth + 1)
                 entries.append(item)
                 seen += 1
+
             return entries
+
         try:
             results = _walk(remote_path, 0)
         except Exception as e:
-            logger.error('list_remote: unexpected error: %s', e)
+            logger.exception('list_remote: unexpected error: %s', e)
         return results
 
-    def delete_directory(self, remote_path: str) -> Dict:
+    def delete_directory(self, remote_path: str, progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict:
         """
         Remove recursivamente `remote_path`. Retorna dict {'success': bool, 'error': str?}.
         Comportamento:
@@ -337,9 +526,9 @@ class SFTPManager:
         if not remote_path:
             return {'success': False, 'error': 'empty remote path'}
 
-        if not self.sftp:
-            if not self.connect():
-                return {'success': False, 'error': f'Not connected: {self._last_error or "connect failed"}'}
+        # always recreate connection before destructive operations
+        if not self._reconnect():
+            return {'success': False, 'error': f'Not connected: {self._last_error or "reconnect failed"}'}
 
         path = self._normalize_remote(remote_path)
 
@@ -377,19 +566,31 @@ class SFTPManager:
                     child = f"{p.rstrip('/')}/{name}" if p != '/' else f"/{name}"
                     try:
                         if _is_dir_from_attr(attr):
+                            # directory: recurse and report progress
+                            if progress_cb:
+                                progress_cb({'path': child, 'type': 'directory', 'status': 'deleting'})
                             res = _remove_recursive(child)
                             if not res.get('success', False):
+                                if progress_cb:
+                                    progress_cb({'path': child, 'type': 'directory', 'status': 'error', 'error': res.get('error')})
                                 return res
-                            # attempt rmdir of emptied child
                             try:
                                 self.sftp.rmdir(child)
+                                if progress_cb:
+                                    progress_cb({'path': child, 'type': 'directory', 'status': 'deleted'})
                             except Exception:
                                 # ignore rmdir failure here; maybe removed inside recursion
                                 pass
                         else:
                             try:
+                                if progress_cb:
+                                    progress_cb({'path': child, 'type': 'file', 'status': 'deleting'})
                                 self.sftp.remove(child)
+                                if progress_cb:
+                                    progress_cb({'path': child, 'type': 'file', 'status': 'deleted'})
                             except Exception as e_remove:
+                                if progress_cb:
+                                    progress_cb({'path': child, 'type': 'file', 'status': 'error', 'error': str(e_remove)})
                                 return {'success': False, 'error': f'remove child failed: {e_remove}'}
                     except Exception as e_iter:
                         return {'success': False, 'error': f'error processing child {child}: {e_iter}'}
