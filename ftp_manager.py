@@ -228,6 +228,7 @@ class FTPManager:
 
     def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, str]:
         # ensure fresh connection for each operation
+        logger.info(f"FTP Remote path to download file: {remote_path}")
         if not self._reconnect():
             return False, "FTP not connected"
 

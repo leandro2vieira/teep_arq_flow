@@ -178,9 +178,10 @@ class SFTPManager:
             logger.exception("upload_file error: %s", e)
             return {'success': False, 'error': str(e)}
 
-    def download_file(self, remote_path: str, local_path: str) -> bool:
+    def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, str]:
         # Return signature similar to FTPManager.download_file: (bool, message)
         # ensure fresh connection for each operation
+        logger.info(f"SFTP Remote path to download file: {remote_path}")
         if not self._reconnect():
             return False, f"Not connected: {self._last_error or 'reconnect failed'}"
         remote = self._normalize_remote(remote_path)
@@ -188,6 +189,7 @@ class SFTPManager:
         try:
             os.makedirs(os.path.dirname(local) or '.', exist_ok=True)
             try:
+                logger.info(f"Downloading file from {remote_path} to {local_path}")
                 self.sftp.get(remote_path, local_path)
             except Exception:
                 # fallback: try retrieving by basename after checking parent
