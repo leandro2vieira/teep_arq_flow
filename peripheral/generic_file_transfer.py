@@ -904,7 +904,43 @@ class GenericFileTransfer:
         return self._stream_file(local_path, remote_path, is_upload=True)
 
     def _handle_download_file_stream(self, local_path: str, remote_path: str) -> Dict:
-        return self._stream_file(local_path, remote_path, is_upload=False)
+        import posixpath
+        import ntpath
+        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
+
+        # preserve original inputs (passed by caller) to derive safe folder names
+        original_local_input = (local_path or '').rstrip('/\\')
+        original_remote_input = (remote_path or '').rstrip('/\\')
+
+        # compute safe base names (remove any path separators so we get a single name)
+        local_base = os.path.basename(original_local_input) if original_local_input else ''
+        remote_base = os.path.basename(original_remote_input.replace('\\', '/')) if original_remote_input else ''
+
+        # build timestamp string DDMMYYYY_HHMMSS
+        timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
+
+        # compose folder name: prefer local_base; if empty, use 'download'
+        if local_base:
+            folder_name = f"{local_base}_{timestamp}_{remote_base}" if remote_base else f"{local_base}_{timestamp}"
+        else:
+            folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
+
+        # ensure folder_name contains no slashes
+        folder_name = folder_name.replace('/', '_').replace('\\', '_')
+
+        # final local_path is server_side_path joined with the composed folder_name
+        local_path = os.path.join(self.io.server_side_path.rstrip('/\\'), folder_name)
+        print(f"Local path to save: {local_path}", flush=True)
+
+        remote_path = _join_path(self.io.remote_side_path, remote_path)
+        print(f"Remote path to download: {remote_path}", flush=True)
+
+        result = self.remote.download_file(remote_path, local_path)
+
+        if result and result.get('success'):
+            return self._send(ActionTable.DOWNLOAD_FILE.value, {'status': 'done'})
+
+        return result
 
     # --- server file tree handling ------------------------------------------------
 
