@@ -221,7 +221,8 @@ class GenericFileTransfer:
                 value = data.get('value', {})
                 local_path = value.get('local_path', '')
                 remote_path = value.get('remote_path', '')
-                result = self._handle_download_directory(local_path, remote_path)
+                # result = self._handle_download_directory(local_path, remote_path)
+                result = self._handle_download_file(local_path, remote_path)
             elif action == ActionTable.DELETE_REMOTE_FILE.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
