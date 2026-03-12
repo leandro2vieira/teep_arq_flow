@@ -537,18 +537,9 @@ class GenericFileTransfer:
         remote_path = _join_path(self.io.remote_side_path, remote_path)
         def op():
             # ensure remote file exists
-            exists = False
-            try:
-                remote_info = self.remote.stat(remote_path)
-                exists = remote_info.get('size') is not None
-            except Exception:
-                pass
-
-            if not exists:
-                return {'success': False, 'error': 'Arquivo remoto não encontrado'}
-
             # perform the download
             result = self.remote.download_file(remote_path, local_path)
+            logger.info(f"SFTP Remote path to download file: {remote_path} with result: {result}")
             if isinstance(result, dict):
                 return result
             return {'success': bool(result)}
