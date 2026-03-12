@@ -533,8 +533,33 @@ class GenericFileTransfer:
             return []
 
     def _handle_download_file(self, local_path: str, remote_path: str) -> Dict:
-        local_path = _join_path(self.io.server_side_path, local_path)
+        import posixpath
+        import ntpath
+        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
+
+        # preserve original inputs (passed by caller) to derive safe folder names
+        original_local_input = (local_path or '').rstrip('/\\')
+        original_remote_input = (remote_path or '').rstrip('/\\')
+
+        # compute safe base names (remove any path separators so we get a single name)
+        local_base = os.path.basename(original_local_input) if original_local_input else ''
+        remote_base = os.path.basename(original_remote_input.replace('\\', '/')) if original_remote_input else ''
+
+        # build timestamp string DDMMYYYY_HHMMSS
+        timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
+
+        folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
+
+        # ensure folder_name contains no slashes
+        folder_name = folder_name.replace('/', '_').replace('\\', '_')
+
+        # final local_path is server_side_path joined with the composed folder_name
+        local_path = os.path.join(self.io.server_side_path.rstrip('/\\'), folder_name)
+        print(f"Local path to save: {local_path}", flush=True)
+
         remote_path = _join_path(self.io.remote_side_path, remote_path)
+        print(f"Remote path to download: {remote_path}", flush=True)
+
         def op():
             # ensure remote file exists
             # perform the download
