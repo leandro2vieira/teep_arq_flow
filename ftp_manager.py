@@ -510,9 +510,11 @@ class FTPManager:
             try:
                 # try as file first
                 ok, msg = self.delete_file(remote)
+                logger.info("Deleted remote file %s via cwd %s", remote, parent)
+                logger.info("delete_directory: tried deleting %s as file, success: %s, msg: %s", remote, ok, msg)
                 if ok:
                     if progress_cb:
-                        progress_cb({'path': remote, 'type': 'file', 'status': 'deleted'})
+                        progress_cb({'path': remote, 'type': 'file', 'status': 'done'})
                     return True, msg
                 # list children and remove recursively
                 children = self.list_remote(remote, include_hidden=True)
@@ -526,7 +528,7 @@ class FTPManager:
                         ok, msg = self.delete_file(path)
                         if ok:
                             if progress_cb:
-                                progress_cb({'path': path, 'type': 'file', 'status': 'deleted'})
+                                progress_cb({'path': path, 'type': 'file', 'status': 'done'})
                         else:
                             logger.warning("Failed to delete file %s: %s", path, msg)
                             if progress_cb:

@@ -819,7 +819,9 @@ class GenericFileTransfer:
                 except Exception:
                     logger.debug("Failed to send delete progress for %s", info)
 
+            logger.info(f"Starting deletion of remote directory: {remote_path}")
             result = self.remote.delete_directory(remote_path, progress_cb=progress_cb)
+            logger.info(f"Finished deletion of remote directory: {remote_path}")
             if isinstance(result, dict):
                 return result
             return {'success': bool(result)}
