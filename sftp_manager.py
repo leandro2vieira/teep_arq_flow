@@ -181,30 +181,41 @@ class SFTPManager:
     def download_file(self, remote_path: str, local_path: str) -> Tuple[bool, str]:
         # Return signature similar to FTPManager.download_file: (bool, message)
         # ensure fresh connection for each operation
-        logger.info(f"SFTP Remote path to download file: {remote_path}")
+        logger.info("SFTP remote path to download file: %s", remote_path)
         if not self._reconnect():
             return False, f"Not connected: {self._last_error or 'reconnect failed'}"
+
         remote = self._normalize_remote(remote_path)
+        if not remote:
+            return False, "empty remote path"
+
         local = local_path
         try:
-            os.makedirs(os.path.dirname(local) or '.', exist_ok=True)
+            # Check remote target type before attempting get()
             try:
-                logger.info(f"Downloading file from {remote_path} to {local_path}")
-                self.sftp.get(remote_path, local_path)
-            except Exception as e:
-                logger.error("download_file fallback failed for %s -> %s: %s", remote_path, local_path, e)
-                # fallback: try retrieving by basename after checking parent
-                parent = os.path.dirname(remote)
-                name = os.path.basename(remote)
-                try:
-                    # attempt to list parent to see if exists
-                    self.sftp.listdir(parent)
-                    self.sftp.get(f"{parent}/{name}", local)
-                except Exception as inner:
-                    logger.error("SFTP download fallback failed for %s: %s", remote, inner)
-                    return False, str(inner)
+                st = self.sftp.stat(remote)
+                import stat as _stat
+                if _stat.S_ISDIR(getattr(st, "st_mode", 0)):
+                    return False, f"remote path is a directory: {remote}"
+            except FileNotFoundError:
+                return False, f"remote path not found: {remote}"
+            except Exception as e_stat:
+                logger.error("download_file: failed to stat remote path %s: %s", remote, e_stat)
+                return False, f"cannot stat remote path: {e_stat}"
+
+            # If local_path points to a directory (or ends with separator), save using remote basename
+            if local.endswith(os.sep) or (os.path.exists(local) and os.path.isdir(local)):
+                os.makedirs(local, exist_ok=True)
+                local = os.path.join(local, os.path.basename(remote))
+            else:
+                os.makedirs(os.path.dirname(local) or ".", exist_ok=True)
+
+            logger.info("Downloading file from %s to %s", remote, local)
+            self.sftp.get(remote, local)
             logger.info("SFTP: downloaded %s -> %s", remote, local)
             return True, ""
+        except IsADirectoryError:
+            return False, f"remote path is a directory: {remote}"
         except Exception as e:
             logger.error("SFTP download_file error: %s", e)
             return False, f"download_file error: {e}"
