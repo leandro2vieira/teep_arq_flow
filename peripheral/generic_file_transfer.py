@@ -155,7 +155,7 @@ class GenericFileTransfer:
             }
         }
 
-    def _send(self, action, value=None):
+    def _send(self, action, value=None) -> Dict:
         resp = self._build_response(action, value)
         self.send_message(resp, f"recv_queue_index_{str(self.get_index())}")
         return resp
@@ -815,7 +815,7 @@ class GenericFileTransfer:
                         'status': payload['status'],
                         'error': payload['error']
                     }
-                    self._send(ActionTable.PROGRESS_SEND_FILE.value, progress_payload)
+                    self._send(ActionTable.DELETE_REMOTE_DIRECTORY.value, progress_payload)
                 except Exception:
                     logger.debug("Failed to send delete progress for %s", info)
 

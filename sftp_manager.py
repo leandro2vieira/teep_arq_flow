@@ -612,3 +612,25 @@ class SFTPManager:
         except Exception as e:
             logger.exception("delete_directory unexpected error for %s: %s", path, e)
             return {'success': False, 'error': str(e)}
+
+    def delete_file(self, remote_path: str) -> Dict:
+        """
+        Remove `remote_path`. Retorna dict {'success': bool, 'error': str?}.
+        Comportamento:
+        - Se o caminho for um ficheiro, tenta removê-lo.
+        - Tenta conectar se necessário.
+        """
+        if not remote_path:
+            return {'success': False, 'error': 'empty remote path'}
+
+        # always recreate connection before destructive operations
+        if not self._reconnect():
+            return {'success': False, 'error': f'Not connected: {self._last_error or "reconnect failed"}'}
+
+        path = self._normalize_remote(remote_path)
+
+        try:
+            self.sftp.remove(path)
+            return {'success': True}
+        except Exception as e_file:
+            return {'success': False, 'error': f'remove file failed: {e_file}'}
