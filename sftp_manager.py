@@ -191,7 +191,8 @@ class SFTPManager:
             try:
                 logger.info(f"Downloading file from {remote_path} to {local_path}")
                 self.sftp.get(remote_path, local_path)
-            except Exception:
+            except Exception as e:
+                logger.error("download_file fallback failed for %s -> %s: %s", remote_path, local_path, e)
                 # fallback: try retrieving by basename after checking parent
                 parent = os.path.dirname(remote)
                 name = os.path.basename(remote)
