@@ -204,18 +204,25 @@ class GenericFileTransfer:
                 local_path = value.get('local_path', '')
                 remote_path = value.get('remote_path', '')
                 result = self._handle_upload_directory(local_path, remote_path)
+
+                ## reboot server
+                self._handle_remote_reboot()
             elif action == ActionTable.STREAM_FILE.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
                 local_path = value.get('local_path', '')
                 remote_path = value.get('remote_path', '')
                 result = self._handle_upload_file(local_path, remote_path)
+
+                ## reboot server
+                self._handle_remote_reboot()
             elif action == ActionTable.DOWNLOAD_FILE.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
                 local_path = value.get('local_path', '')
                 remote_path = value.get('remote_path', '')
                 result = self._handle_download_file(local_path, remote_path)
+
             elif action == ActionTable.DOWNLOAD_DIRECTORY.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
@@ -223,16 +230,23 @@ class GenericFileTransfer:
                 remote_path = value.get('remote_path', '')
                 # result = self._handle_download_directory(local_path, remote_path)
                 result = self._handle_download_file(local_path, remote_path)
+
             elif action == ActionTable.DELETE_REMOTE_FILE.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
                 remote_path = value.get('remote_path', '')
                 result = self._handle_delete_remote_file(remote_path)
+
+                ## reboot server
+                self._handle_remote_reboot()
             elif action == ActionTable.DELETE_REMOTE_DIRECTORY.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
                 remote_path = value.get('remote_path', '')
                 result = self._handle_delete_remote_directory(remote_path)
+
+                ## reboot server
+                self._handle_remote_reboot()
             elif action == ActionTable.REMOTE_REBOOT.value:
                 result = self._handle_remote_reboot()
             else:
