@@ -73,7 +73,7 @@ class ActionTable(Enum):
 
     PROGRESS_SEND_FILE = 67
 
-    REMOTE_REBOOT = 68
+    REMOTE_REBOOT = 69
 
 
 
