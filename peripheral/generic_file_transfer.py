@@ -233,6 +233,8 @@ class GenericFileTransfer:
                 value = data.get('value', {})
                 remote_path = value.get('remote_path', '')
                 result = self._handle_delete_remote_directory(remote_path)
+            elif action == ActionTable.REMOTE_REBOOT.value:
+                result = self._handle_remote_reboot()
             else:
                 response['action'] = ActionTable.ERROR.value
                 result = f" Comando desconhecido: {action}"
@@ -847,6 +849,34 @@ class GenericFileTransfer:
         if result and result.get('success'):
             return self._send(ActionTable.DELETE_REMOTE_DIRECTORY.value, {'status': 'done'})
 
+        return result
+
+    def _handle_remote_reboot(self) -> tuple:
+        """Send 'sudo reboot' to the remote server via SSH.
+
+        Only supported on SSH-based protocols (scp / sftp).
+        Assumes the remote user has passwordless sudo for the reboot command.
+        Returns (bool, str) tuple.
+        """
+        proto = (self.protocol or '').lower()
+        if proto not in ('scp', 'sftp'):
+            msg = "Reboot only supported on SSH-based protocols (scp/sftp)"
+            logger.warning(msg)
+            return False, msg
+
+        def op():
+            logger.info("Sending 'sudo reboot' to %s:%s", self.host, self.port)
+            success, output = self.remote.exec_command("sudo reboot")
+            if success:
+                logger.info("Reboot command accepted by %s:%s", self.host, self.port)
+            else:
+                logger.error("Reboot command failed on %s:%s -> %s", self.host, self.port, output)
+            return success, output
+
+        result = self._with_ftp(op)
+        # _with_ftp may wrap exceptions into {'success': False, 'error': ...}
+        if isinstance(result, dict):
+            return result.get('success', False), result.get('error', 'unknown error')
         return result
 
     # --- file and directory streaming ------------------------------------------------

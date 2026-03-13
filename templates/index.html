@@ -689,7 +689,11 @@ async function loadPeripherals(){
     const res = await fetch('/api/peripherals');
     const data = await res.json();
     if(!data || data.length === 0){ list.innerHTML = '<div class="empty-state">Nenhum periférico encontrado</div>'; return; }
-    const rows = data.map(p => `<tr>
+    const rows = data.map(p => {
+      const proto = ((p.json_connection_params||{}).protocol||'').toLowerCase();
+      const isSSH = proto === 'scp' || proto === 'sftp';
+      const rebootBtn = isSSH ? `<button class="btn" style="background:rgba(255,80,80,0.15);color:#ff8a8a;border-color:rgba(255,80,80,0.2)" onclick="rebootPeripheral(${p.id}, '${escapeJs(p.name||'')}')">⏻ Reboot</button>` : '';
+      return `<tr>
       <td>${p.id}</td>
       <td>${escapeHtml(p.name||'')}</td>
       <td>${escapeHtml(p.interface||'')}</td>
@@ -700,9 +704,11 @@ async function loadPeripherals(){
         <div class="actions">
           <button class="btn" onclick="openPeripheralModal(${p.id})">Editar</button>
           <button class="btn" onclick="deletePeripheral(${p.id}, '${escapeJs(p.name||'')}')">Deletar</button>
+          ${rebootBtn}
         </div>
       </td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
     list.innerHTML = `<table><thead><tr><th>ID</th><th>Nome</th><th>Interface</th><th>Dispositivo</th><th>Modelo</th><th>Última Atualização</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   } catch(e){ list.innerHTML = '<div class="empty-state">Erro ao carregar periféricos</div>'; console.error(e); }
 }
@@ -1058,6 +1064,26 @@ async function deletePeripheral(id,name){
     const res = await fetch(`/api/peripherals/${id}`,{method:'DELETE'});
     if(res.ok){ loadPeripherals(); showAlert('success','Periférico deletado'); } else showAlert('error','Erro ao deletar periférico');
   } catch(e){ console.error(e); showAlert('error','Erro ao deletar periférico'); }
+}
+
+async function rebootPeripheral(id, name){
+  if(!confirm(`⚠️ Deseja realmente reiniciar o servidor remoto do periférico "${name}"?\n\nEssa ação executará "sudo reboot" no servidor.`)) return;
+  try{
+    const res = await fetch('/api/peripheral_reboot', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ peripheral_id: id })
+    });
+    const data = await res.json();
+    if(data.success){
+      showAlert('success', data.message || 'Comando de reboot enviado com sucesso');
+    } else {
+      showAlert('error', data.message || 'Falha ao enviar comando de reboot');
+    }
+  } catch(e){
+    console.error(e);
+    showAlert('error', 'Erro ao enviar comando de reboot');
+  }
 }
 
 async function deleteOperation(id){

@@ -104,6 +104,33 @@ class SFTPManager:
         except Exception:
             pass
 
+    def exec_command(self, command: str, timeout: int = 30) -> Tuple[bool, str]:
+        """Execute an arbitrary command on the remote server via SSH.
+
+        Returns (True, stdout_output) on success (exit code 0) or
+                (False, stderr_output_or_error) on failure.
+        Requires an active SSH connection (self.ssh).
+        """
+        if not self.ssh:
+            msg = "exec_command: not connected (no SSH session)"
+            logger.error(msg)
+            return False, msg
+        try:
+            stdin, stdout, stderr = self.ssh.exec_command(command, timeout=timeout)
+            exit_code = stdout.channel.recv_exit_status()
+            out = stdout.read().decode('utf-8', errors='replace').strip()
+            err = stderr.read().decode('utf-8', errors='replace').strip()
+            if exit_code == 0:
+                logger.info("exec_command OK: %s -> %s", command, out or '(no output)')
+                return True, out
+            else:
+                detail = err or out or f"exit code {exit_code}"
+                logger.error("exec_command failed (exit %d): %s -> %s", exit_code, command, detail)
+                return False, detail
+        except Exception as e:
+            logger.exception("exec_command error: %s", e)
+            return False, str(e)
+
     def _mkdir_remote_recursive(self, remote_path: str):
         # Create directories recursively. Preserve absolute vs relative.
         if not remote_path:

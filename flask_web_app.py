@@ -250,6 +250,71 @@ class FlaskWebApp:
                 logger.exception("activate_debug failed for index %s: %s", index, e)
                 return jsonify({'error': str(e)}), 400
 
+        @self.app.route('/api/peripheral_reboot', methods=['POST'])
+        def peripheral_reboot():
+            """Send a 'sudo reboot' command to a peripheral's remote server via SSH.
+            Expects JSON: { "peripheral_id": <int> }
+            The peripheral must use an SSH-based protocol (scp/sftp).
+            """
+            data = request.get_json() or {}
+            peripheral_id = data.get('peripheral_id')
+            if not peripheral_id:
+                return jsonify({'success': False, 'message': 'peripheral_id is required'}), 400
+            try:
+                p = self.config_manager.get_peripheral(int(peripheral_id))
+                if not p:
+                    return jsonify({'success': False, 'message': 'Peripheral not found'}), 404
+
+                # determine protocol from connection params
+                conn = p.get('json_connection_params') or {}
+                if isinstance(conn, str):
+                    try:
+                        conn = json.loads(conn)
+                    except Exception:
+                        conn = {}
+                proto = (conn.get('protocol') or '').lower()
+                if proto not in ('scp', 'sftp'):
+                    return jsonify({'success': False, 'message': 'Reboot only supported on SSH-based protocols (scp/sftp)'}), 400
+
+                # resolve index from channel config
+                ch_cfg = p.get('json_channel_to_virtual_index') or {}
+                if isinstance(ch_cfg, str):
+                    try:
+                        ch_cfg = json.loads(ch_cfg)
+                    except Exception:
+                        ch_cfg = {}
+                # find the first index value
+                idx = None
+                if isinstance(ch_cfg, dict):
+                    for k, v in ch_cfg.items():
+                        idx = v.get('index') if isinstance(v, dict) else v
+                        if idx is not None:
+                            break
+                elif isinstance(ch_cfg, list) and ch_cfg:
+                    first = ch_cfg[0]
+                    idx = first.get('index') if isinstance(first, dict) else first
+
+                if idx is None:
+                    return jsonify({'success': False, 'message': 'No index found for this peripheral'}), 400
+
+                # publish REMOTE_REBOOT action to the peripheral send queue
+                send_queue = f"send_queue_index_{idx}"
+                reboot_msg = {
+                    'action': 68,  # ActionTable.REMOTE_REBOOT
+                    'data': {
+                        'index': str(idx),
+                        'value': {},
+                    }
+                }
+                if self.rabbitmq_service:
+                    self.rabbitmq_service.send_message(reboot_msg, routing_key=send_queue)
+                    return jsonify({'success': True, 'message': f'Reboot command sent to peripheral {p.get("name", peripheral_id)} (queue: {send_queue})'})
+                else:
+                    return jsonify({'success': False, 'message': 'RabbitMQ service not available'}), 503
+            except Exception as e:
+                logger.exception("peripheral_reboot failed: %s", e)
+                return jsonify({'success': False, 'message': str(e)}), 500
+
         # ========== Automation routes ==========
         @self.app.route('/api/automations', methods=['GET'])
         def get_automations():
