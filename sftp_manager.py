@@ -116,28 +116,23 @@ class SFTPManager:
             logger.error(msg)
             return False, msg
         try:
-            # Request a PTY so that commands like 'sudo' that require a tty work
+            # Fire-and-forget: request a PTY, send the command, then disconnect
+            # immediately without waiting for output or exit status.
             chan = self.ssh.get_transport().open_session()
             chan.settimeout(timeout)
             chan.get_pty()
             chan.exec_command(command)
-            exit_code = chan.recv_exit_status()
-            out = ''
-            err = ''
-            while chan.recv_ready():
-                out += chan.recv(65536).decode('utf-8', errors='replace')
-            while chan.recv_stderr_ready():
-                err += chan.recv_stderr(65536).decode('utf-8', errors='replace')
-            out = out.strip()
-            err = err.strip()
-            chan.close()
-            if exit_code == 0:
-                logger.info("exec_command OK: %s -> %s", command, out or '(no output)')
-                return True, out
-            else:
-                detail = err or out or f"exit code {exit_code}"
-                logger.error("exec_command failed (exit %d): %s -> %s", exit_code, command, detail)
-                return False, detail
+            logger.info("exec_command sent (fire-and-forget): %s", command)
+            # Release the channel and connection right away
+            try:
+                chan.close()
+            except Exception:
+                pass
+            try:
+                self.disconnect()
+            except Exception:
+                pass
+            return True, "command sent (fire-and-forget)"
         except Exception as e:
             logger.exception("exec_command error: %s", e)
             return False, str(e)
