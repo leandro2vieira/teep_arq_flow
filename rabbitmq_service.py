@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 import json
 import logging
 from datetime import datetime
@@ -317,8 +318,16 @@ class RabbitMQService:
                                     action = str(message.get("action"))
                                     data = message.get("data", {})
 
-                                    # caminho para alvo único via extra.send_to
-                                    extras = data.get("extra", {})
+                                    # caminho para alvo(s) via extra.send_to
+                                    extras_raw = data.get("extra", {})
+
+                                    # normaliza extras para lista de dicts
+                                    if isinstance(extras_raw, dict):
+                                        extras_list = [extras_raw] if extras_raw else []
+                                    elif isinstance(extras_raw, list):
+                                        extras_list = [e for e in extras_raw if isinstance(e, dict)]
+                                    else:
+                                        extras_list = []
 
                                     if action == "68":
                                         logger.info("Mensagem de verificação recebida (ação 68), respondendo com índices de filas alvo")
@@ -332,14 +341,20 @@ class RabbitMQService:
                                         queue = f"recv_queue_index_{data.get('index')}"
                                         logger.info(f"Mensagem recebida para fila: {queue} - {result}")
                                         self.send_message(result, queue)
-                                    elif isinstance(extras, dict) and "send_to" in extras:
-                                        logger.info(f"Roteando mensagem para fila alvo única: {extras['send_to']}")
-                                        send_to = extras["send_to"]
-                                        # usa index vindo dos extras se disponível
-                                        if "index" in extras and isinstance(extras["index"], (int, str)):
-                                            data["index"] = extras["index"]
-                                            message["data"] = data
-                                        self.send_message(message, send_to)
+                                    elif extras_list and any("send_to" in e for e in extras_list):
+                                        logger.info(f"Roteando mensagem para {len(extras_list)} fila(s) alvo via extra")
+                                        for extra_item in extras_list:
+                                            send_to = extra_item.get("send_to")
+                                            if not send_to:
+                                                logger.warning("Extra item sem 'send_to', ignorando: %r", extra_item)
+                                                continue
+                                            # cria cópia da mensagem para cada destino
+                                            msg_copy = copy.deepcopy(message)
+                                            # usa index vindo do extra se disponível
+                                            if "index" in extra_item and isinstance(extra_item["index"], (int, str)):
+                                                msg_copy["data"]["index"] = extra_item["index"]
+                                            logger.info(f"Roteando para fila via extra: {send_to} com index {extra_item.get('index')}")
+                                            self.send_message(msg_copy, send_to)
                                     else:
                                         # rota para múltiplos targets
                                         logger.info(f"Roteando mensagem para filas alvo: {target_queues_param}")
