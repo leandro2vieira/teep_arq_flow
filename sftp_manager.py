@@ -104,12 +104,16 @@ class SFTPManager:
         except Exception:
             pass
 
-    def exec_command(self, command: str, timeout: int = 30) -> Tuple[bool, str]:
+    def exec_command(self, command: str, timeout: int = 30, sudo_password: str = None) -> Tuple[bool, str]:
         """Execute an arbitrary command on the remote server via SSH.
 
-        Returns (True, stdout_output) on success (exit code 0) or
-                (False, stderr_output_or_error) on failure.
-        Requires an active SSH connection (self.ssh).
+        If *sudo_password* is provided the password is fed to stdin after a
+        short delay so that ``sudo -S`` (or a PTY-based sudo prompt) can
+        consume it.
+
+        The method is fire-and-forget: it sends the command and disconnects
+        immediately without waiting for output or exit status.
+        Returns (True, 'command sent ...') on dispatch or (False, error).
         """
         if not self.ssh:
             msg = "exec_command: not connected (no SSH session)"
@@ -122,6 +126,15 @@ class SFTPManager:
             chan.settimeout(timeout)
             chan.get_pty()
             chan.exec_command(command)
+
+            # If a sudo password was supplied, write it to stdin so sudo can
+            # authenticate.  The newline simulates pressing Enter.
+            if sudo_password:
+                import time
+                time.sleep(0.5)  # small delay for sudo prompt to appear
+                chan.send(sudo_password + '\n')
+                time.sleep(0.3)  # allow sudo to process the password
+
             logger.info("exec_command sent (fire-and-forget): %s", command)
             # Release the channel and connection right away
             try:
