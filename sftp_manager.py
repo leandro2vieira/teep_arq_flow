@@ -116,10 +116,21 @@ class SFTPManager:
             logger.error(msg)
             return False, msg
         try:
-            stdin, stdout, stderr = self.ssh.exec_command(command, timeout=timeout)
-            exit_code = stdout.channel.recv_exit_status()
-            out = stdout.read().decode('utf-8', errors='replace').strip()
-            err = stderr.read().decode('utf-8', errors='replace').strip()
+            # Request a PTY so that commands like 'sudo' that require a tty work
+            chan = self.ssh.get_transport().open_session()
+            chan.settimeout(timeout)
+            chan.get_pty()
+            chan.exec_command(command)
+            exit_code = chan.recv_exit_status()
+            out = ''
+            err = ''
+            while chan.recv_ready():
+                out += chan.recv(65536).decode('utf-8', errors='replace')
+            while chan.recv_stderr_ready():
+                err += chan.recv_stderr(65536).decode('utf-8', errors='replace')
+            out = out.strip()
+            err = err.strip()
+            chan.close()
             if exit_code == 0:
                 logger.info("exec_command OK: %s -> %s", command, out or '(no output)')
                 return True, out
