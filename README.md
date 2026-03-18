@@ -25,31 +25,33 @@ Ações de alto nível suportadas:
 - upload_file, download_file  
 - upload_directory, download_directory  
 - delete_remote_file, delete_remote_directory  
+- create_file_from_template (cria arquivo a partir de template JSON e envia ao servidor remoto)
 - get_remote_file_tree, get_server_file_tree  
 - Operações de stream enviam notificações START/FINISH para transferências grandes
 
 ### Lista de actions suportadas
-| Nome da action             | Código | Descrição                                                                                      |
-|----------------------------|-------:|------------------------------------------------------------------------------------------------|
-| `START_STREAM_FILE`        |     33 | Indica início do envio de arquivo (stream) do servidor local para o FTP remoto                 |
-| `FINISH_STREAM_FILE`       |     34 | Indica conclusão bem-sucedida do envio de arquivo                                              |
-| `STREAM_FILE`              |     35 | Comando para enviar um único arquivo                                                           |
-| `START_DOWNLOAD_FILE`      |     55 | Indica início do download de arquivo do FTP remoto para o servidor local                       |
-| `FINISH_DOWNLOAD_FILE`     |     56 | Indica conclusão bem-sucedida do download de arquivo                                           |
-| `DOWNLOAD_FILE`            |     63 | Comando para baixar um único arquivo                                                           |
-| `ERROR_DOWNLOAD_FILE`      |     57 | Indica erro no download; detalhes estarão em `value`                                           |
-| `GET_SERVER_FILE_TREE`     |     58 | Solicita a árvore de arquivos do servidor local                                                |
-| `GET_REMOTE_FILE_TREE`     |     59 | Solicita a árvore de arquivos do FTP remoto                                                    |
-| `SERVER_FILE_TREE`         |     60 | Resposta com a árvore de arquivos do servidor local                                            |
-| `CLIENT_FILE_TREE`         |     61 | Resposta com a árvore de arquivos do FTP remoto                                                |
-| `ERROR`                    |     62 | Erro em alguma operação; detalhes em `value`                                                   |
-| `DELETE_REMOTE_FILE`       |     63 | Comando para deletar arquivo no FTP remoto (retorna mesmo código em caso de sucesso)           |
-| `DELETE_REMOTE_DIRECTORY`  |     64 | Comando para deletar diretório remoto recursivamente (retorna mesmo código em caso de sucesso) |
-| `STREAM_DIRECTORY`         |     65 | Comando para enviar diretório local ao FTP remoto                                              |
-| `DOWNLOAD_DIRECTORY`       |     66 | Comando para baixar diretório do FTP remoto para o servidor local                              |
-| `PROGRESS_SEND_FILE`       |     67 | Indica o progresso de envio de arquivos `value`                                                |
-| `LIST_PERIPHERALS`         |     68 | Lista periféricos                                                                              |
-| `REMOTE_REBOOT`            |     69 | Envia commando reboot por ssh                                                                  |
+| Nome da action              | Código | Descrição                                                                                      |
+|-----------------------------|-------:|------------------------------------------------------------------------------------------------|
+| `START_STREAM_FILE`         |     33 | Indica início do envio de arquivo (stream) do servidor local para o FTP remoto                 |
+| `FINISH_STREAM_FILE`        |     34 | Indica conclusão bem-sucedida do envio de arquivo                                              |
+| `STREAM_FILE`               |     35 | Comando para enviar um único arquivo                                                           |
+| `START_DOWNLOAD_FILE`       |     55 | Indica início do download de arquivo do FTP remoto para o servidor local                       |
+| `FINISH_DOWNLOAD_FILE`      |     56 | Indica conclusão bem-sucedida do download de arquivo                                           |
+| `DOWNLOAD_FILE`             |     63 | Comando para baixar um único arquivo                                                           |
+| `ERROR_DOWNLOAD_FILE`       |     57 | Indica erro no download; detalhes estarão em `value`                                           |
+| `GET_SERVER_FILE_TREE`      |     58 | Solicita a árvore de arquivos do servidor local                                                |
+| `GET_REMOTE_FILE_TREE`      |     59 | Solicita a árvore de arquivos do FTP remoto                                                    |
+| `SERVER_FILE_TREE`          |     60 | Resposta com a árvore de arquivos do servidor local                                            |
+| `CLIENT_FILE_TREE`          |     61 | Resposta com a árvore de arquivos do FTP remoto                                                |
+| `ERROR`                     |     62 | Erro em alguma operação; detalhes em `value`                                                   |
+| `DELETE_REMOTE_FILE`        |     63 | Comando para deletar arquivo no FTP remoto (retorna mesmo código em caso de sucesso)           |
+| `DELETE_REMOTE_DIRECTORY`   |     64 | Comando para deletar diretório remoto recursivamente (retorna mesmo código em caso de sucesso) |
+| `STREAM_DIRECTORY`          |     65 | Comando para enviar diretório local ao FTP remoto                                              |
+| `DOWNLOAD_DIRECTORY`        |     66 | Comando para baixar diretório do FTP remoto para o servidor local                              |
+| `PROGRESS_SEND_FILE`        |     67 | Indica o progresso de envio de arquivos `value`                                                |
+| `LIST_PERIPHERALS`          |     68 | Lista periféricos                                                                              |
+| `REMOTE_REBOOT`             |     69 | Envia commando reboot por ssh                                                                  |
+| `CREATE_FILE_FROM_TEMPLATE` |     70 | Cria novo arquivo a partir de template, troca nome e envia para (S)FTP ou SCP                  |
 
 ## Modos de uso:
 
@@ -352,6 +354,45 @@ Progresso no envio de arquivo ou diretório:
         "send_to": "send_queue_index_3"
       }
     ]
+  }
+}
+```
+Criar arquivo a partir de template JSON e enviar para o servidor remoto
+- Enviar o seguinte JSON para a fila send_queue_index_$ RabbitMQ:
+- O `local_path` aponta para o arquivo template JSON no servidor local (relativo ao `server_side_path` do periférico)
+- O `remote_path` indica a pasta de destino no servidor remoto (relativo ao `remote_side_path` do periférico)
+- O `name` é o valor que será escrito em `programa.name` dentro do template
+- O "extra" é opcional, funciona apenas para automation, forca enviar para apenas um redirecionamento
+```json
+{
+  "action": 70, 
+  "data": {
+    "index": $, 
+    "value": {
+      "name": "NomeDoProgramaAqui",
+      "local_path": "/templates/template.json", 
+      "remote_path": "/destino/"
+    },
+    "extra": {
+      "index": 3, 
+      "name": "Robo3", 
+      "send_to": "send_queue_index_3"
+    }
+  }
+}
+```
+- A resposta será enviada para a fila recv_queue_index_$ RabbitMQ:
+```json
+{
+  "action": 70, 
+  "data": {
+    "index": $, 
+    "value": {
+      "success": true,
+      "message": "",
+      "result": "File uploaded to /destino/template.json"
+    }, 
+    "timestamp": 1762463590
   }
 }
 ```

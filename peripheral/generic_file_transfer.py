@@ -249,6 +249,13 @@ class GenericFileTransfer:
                 self._handle_remote_reboot()
             elif action == ActionTable.REMOTE_REBOOT.value:
                 result = self._handle_remote_reboot()
+            elif action == ActionTable.CREATE_FILE_FROM_TEMPLATE.value:
+                data = message.get('data', {})
+                value = data.get('value', {})
+                name = value.get('name', '')
+                local_path = value.get('local_path', '')
+                remote_path = value.get('remote_path', '')
+                result = self._handle_create_file_from_template(name, local_path, remote_path)
             else:
                 response['action'] = ActionTable.ERROR.value
                 result = f" Comando desconhecido: {action}"
@@ -864,6 +871,125 @@ class GenericFileTransfer:
             return self._send(ActionTable.DELETE_REMOTE_DIRECTORY.value, {'status': 'done'})
 
         return result
+
+    def _handle_create_file_from_template(self, name: str, local_path: str, remote_path: str) -> tuple:
+        """Create a new file from a JSON template, set programa.name, and upload to FTP.
+
+        Args:
+            name: value to write into template["programa"]["name"]
+            local_path: path (relative to server_side_path) to the JSON template file
+            remote_path: destination path (relative to remote_side_path) on the FTP server
+        Returns:
+            (bool, str) tuple with success flag and message
+        """
+        import tempfile
+        import posixpath
+
+        # resolve template file on the local server
+        template_abs = os.path.join(
+            self.io.server_side_path.rstrip('/\\'),
+            (local_path or '').lstrip('/\\')
+        )
+
+        if not os.path.isfile(template_abs):
+            msg = f"Template file not found: {template_abs}"
+            logger.error(msg)
+            return False, msg
+
+        # read and parse the JSON template
+        try:
+            with open(template_abs, 'r', encoding='utf-8') as f:
+                template_data = json.load(f)
+        except Exception as e:
+            msg = f"Failed to read/parse template JSON: {e}"
+            logger.error(msg)
+            return False, msg
+
+        # set programa.name in the template
+        if not isinstance(template_data, dict):
+            msg = "Template JSON root is not a dict"
+            logger.error(msg)
+            return False, msg
+
+        # Navigate to RemoteIO (list of objects), each containing a 'program' list.
+        # Find the program object with port == 2 and replace its name.
+        remote_io_list = template_data.get('RemoteIO')
+        if not isinstance(remote_io_list, list):
+            msg = "Template JSON 'RemoteIO' is not a list"
+            logger.error(msg)
+            return False, msg
+
+        target_found = False
+        for rio in remote_io_list:
+            if not isinstance(rio, dict):
+                continue
+            program_list = rio.get('program')
+            if not isinstance(program_list, list):
+                continue
+            for prog in program_list:
+                if isinstance(prog, dict) and prog.get('port') == 2:
+                    prog['name'] = name
+                    target_found = True
+                    break
+            if target_found:
+                break
+
+        if not target_found:
+            msg = "No program object with port == 2 found in RemoteIO[].program[]"
+            logger.error(msg)
+            return False, msg
+
+        # write the modified JSON to a temporary file
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json', prefix='template_')
+            with os.fdopen(tmp_fd, 'w', encoding='utf-8') as tmp_f:
+                json.dump(template_data, tmp_f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            msg = f"Failed to write temporary file: {e}"
+            logger.error(msg)
+            return False, msg
+
+        # build the remote destination path
+        # use template filename as the uploaded filename
+        template_filename = os.path.basename(template_abs)
+        remote_dest = _join_path(self.io.remote_side_path, remote_path)
+        remote_dest = posixpath.join(remote_dest.rstrip('/'), template_filename)
+
+        def op():
+            try:
+                # ensure remote directory exists
+                parent_remote = posixpath.dirname(remote_dest)
+                try:
+                    self._ensure_remote_dirs(parent_remote)
+                except Exception:
+                    logger.debug("Failed to ensure remote dirs for %s", parent_remote)
+
+                # upload the file
+                result = self.remote.upload_file(tmp_path, remote_dest)
+                if isinstance(result, dict):
+                    ok = result.get('success', False)
+                else:
+                    ok = bool(result)
+
+                if ok:
+                    logger.info("Template file uploaded to %s with programa.name='%s'", remote_dest, name)
+                    return True, f"File uploaded to {remote_dest}"
+                else:
+                    msg = f"Upload failed: {result}"
+                    logger.error(msg)
+                    return False, msg
+            finally:
+                # clean up temp file
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+        result = self._with_ftp(op)
+
+        if result[0]:
+            return self._send(ActionTable.STREAM_FILE.value, {'status': 'done'})
+        return self._send(ActionTable.STREAM_FILE.value, {'status': 'error', 'message': result[1]})
 
     def _handle_remote_reboot(self) -> tuple:
         """Send 'sudo reboot' to the remote server via SSH.

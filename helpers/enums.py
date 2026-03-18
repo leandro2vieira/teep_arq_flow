@@ -74,6 +74,7 @@ class ActionTable(Enum):
     PROGRESS_SEND_FILE = 67
 
     REMOTE_REBOOT = 69
+    CREATE_FILE_FROM_TEMPLATE = 70
 
 
 
