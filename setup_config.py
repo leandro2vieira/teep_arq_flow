@@ -406,6 +406,7 @@ class ConfigManager:
             # ensure server_os present (default to linux for backward compatibility)
             if 'server_os' not in r or not r.get('server_os'):
                 r['server_os'] = 'linux'
+        print(f"Retrieved {len(results)} peripherals from database")
         return results
 
     def get_peripheral(self, peripheral_id: int) -> Optional[Dict]:

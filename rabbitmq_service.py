@@ -158,6 +158,8 @@ class RabbitMQService:
             json_channel_to_virtual_index = peripheral.get('json_channel_to_virtual_index', {})
             json_connection_params = peripheral.get('json_connection_params', {})
 
+            name = peripheral.get('name', 'unknown')
+
             # Defensive validation: these fields may come as JSON strings or other types.
             if isinstance(json_connection_params, str):
                 try:
@@ -196,7 +198,8 @@ class RabbitMQService:
                                               json_channel_to_virtual_index,
                                               self.send_message,
                                               Queue(),
-                                              self.config_manager)
+                                              self.config_manager,
+                                              name)
 
             _index = _peripheral.get_index()
             if _index is None:
@@ -442,17 +445,35 @@ class RabbitMQService:
         return
 
     def send_message(self, message: Dict[str, Any], routing_key: str = None):
-        """Envia uma mensagem para a fila de saída"""
+        """Envia uma mensagem para a fila de saída.
+
+        If called from a thread other than the pika I/O thread we schedule the
+        publish via ``connection.add_callback_threadsafe`` so that the frame is
+        flushed immediately instead of being buffered until the current callback
+        returns.
+        """
+        def _do_publish():
+            try:
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=routing_key,
+                    body=json.dumps(message),
+                    properties=pika.BasicProperties(delivery_mode=2)
+                )
+                logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
+            except Exception as e:
+                logger.error(f"Erro ao enviar mensagem: {e}")
+
         try:
-            self.channel.basic_publish(
-                exchange='',
-                routing_key=routing_key,
-                body=json.dumps(message),
-                properties=pika.BasicProperties(delivery_mode=2)
-            )
-            logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
+            if self.connection and self.connection.is_open:
+                self.connection.add_callback_threadsafe(_do_publish)
+            else:
+                # fallback: publish directly (best effort)
+                _do_publish()
         except Exception as e:
-            logger.error(f"Erro ao enviar mensagem: {e}")
+            logger.error(f"Erro ao agendar envio de mensagem: {e}")
+            # last resort fallback
+            _do_publish()
 
     def _handle_update_config(self, message: Dict) -> Dict:
         """Atualiza configurações"""

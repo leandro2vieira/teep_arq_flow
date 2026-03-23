@@ -25,7 +25,7 @@ class FTPManager:
     """Refactored FTP manager with safer connection and directory handling."""
 
     def __init__(self, host: str, port: int = 21, user: str = 'anonymous',
-                 password: str = '', use_tls: bool = False, timeout: int = 30, passive: bool = True):
+                 password: str = '', use_tls: bool = False, timeout: int = 30, passive: bool = True, name: str = ''):
         self.host = host
         self.port = port
         self.user = user
@@ -33,6 +33,7 @@ class FTPManager:
         self.timeout = timeout
         self.passive = passive
         self.use_tls = use_tls
+        self.name = name
         self.ftp: Optional[FTP] = None
 
     def connect(self) -> bool:

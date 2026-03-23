@@ -18,7 +18,7 @@ class SCPManager:
     """Manager for transferring files over SSH/SCP (SFTP fallback)."""
 
     def __init__(self, host: str, port: int = 22, user: str = '',
-                 password: str = '', timeout: int = 30):
+                 password: str = '', timeout: int = 30, name: str = ''):
         self.host = host
         self.port = port
         self.user = user
@@ -29,6 +29,7 @@ class SCPManager:
         self.ssh: Optional[paramiko.SSHClient] = None
         self.sftp: Optional[paramiko.SFTPClient] = None
         self.scp: Optional[SCPClient] = None
+        self.name: str = name
 
     def test_socket_connect(self) -> bool:
         """Quick check if TCP connect to host:port is possible (helps differentiate network vs SSH errors)."""

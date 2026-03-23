@@ -10,12 +10,13 @@ logger = logging.getLogger(__name__)
 class SFTPManager:
     """Manager for pure SFTP operations (uses Paramiko SFTPClient)."""
 
-    def __init__(self, host: str, port: int = 22, user: str = '', password: str = '', timeout: int = 30):
+    def __init__(self, host: str, port: int = 22, user: str = '', password: str = '', timeout: int = 30, name: str = ''):
         self.host = host
         self.port = int(port) if port is not None else 22
         self.user = user
         self.password = password
         self.timeout = timeout
+        self.name = name
         self.key_filename = None
         self.ssh: Optional[paramiko.SSHClient] = None
         self.sftp: Optional[paramiko.SFTPClient] = None
@@ -130,10 +131,14 @@ class SFTPManager:
             # If a sudo password was supplied, write it to stdin so sudo can
             # authenticate.  The newline simulates pressing Enter.
             if sudo_password:
-                import time
-                time.sleep(0.5)  # small delay for sudo prompt to appear
-                chan.send(sudo_password + '\n')
-                time.sleep(0.3)  # allow sudo to process the password
+                try:
+                    import time
+                    time.sleep(0.5)  # small delay for sudo prompt to appear
+                    chan.send(sudo_password + '\n')
+                    time.sleep(0.3)  # allow sudo to process the password
+                except Exception as e:
+                    logger.warning("Failed to send sudo password for exec_command: %s", e)
+                    pass
 
             logger.info("exec_command sent (fire-and-forget): %s", command)
             # Release the channel and connection right away

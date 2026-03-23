@@ -59,8 +59,9 @@ def consume_queue(q: Queue, business_callback):
         business_callback(command)
 
 class GenericFileTransfer:
-    def __init__(self, config: Dict[str, Any], io_config: Dict[str, Any], send_message_callback, command_queue: Queue, config_manager):
+    def __init__(self, config: Dict[str, Any], io_config: Dict[str, Any], send_message_callback, command_queue: Queue, config_manager, name: str):
         self.host = config.get('host', 'localhost')
+        self.name = name
         # coerce port to int when possible; default to 21 (ftp) or later adjusted for sftp/scp
         try:
             self.port = int(config.get('port')) if config.get('port') is not None and config.get('port') != '' else 21
@@ -85,7 +86,8 @@ class GenericFileTransfer:
                 port=self.port,
                 user=self.user,
                 password=self.password,
-                timeout=self.timeout
+                timeout=self.timeout,
+                name=self.name
             )
             # allow optional key file
             key_path = config.get('private_key_path') or config.get('key_filename') or config.get('private_key')
@@ -101,7 +103,8 @@ class GenericFileTransfer:
                 port=self.port,
                 user=self.user,
                 password=self.password,
-                timeout=self.timeout
+                timeout=self.timeout,
+                name=self.name
             )
             key_path = config.get('private_key_path') or config.get('key_filename') or config.get('private_key')
             if key_path:
@@ -118,7 +121,8 @@ class GenericFileTransfer:
                 user=self.user,
                 password=self.password,
                 use_tls=use_tls,
-                timeout=self.timeout
+                timeout=self.timeout,
+                name=self.name
             )
 
         # merge possible server_os from top-level config into io config for convenience
@@ -163,12 +167,12 @@ class GenericFileTransfer:
     # Wrapper that ensures FTP connection and disconnect
     def _with_ftp(self, func, *args, **kwargs):
         if not self.remote.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP'}
+            return {'success': False, 'error': 'Falha ao conectar FTP', 'message': 'Falha ao conectar FTP', 'status': 'error'}
         try:
             return func(*args, **kwargs)
         except Exception as e:
             logger.exception("FTP operation failed: %s", e)
-            return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': str(e), 'message': str(e), 'status': 'error'}
         finally:
             try:
                 self.remote.disconnect()
@@ -178,8 +182,33 @@ class GenericFileTransfer:
     # --- message processing -----------------------------------------------------
 
     def process_message(self, ch, method, properties, body):
+        """Callback invoked by pika when a message arrives.
+
+        We ack the message immediately and dispatch the actual work to a
+        background thread so that pika's I/O loop is free to flush any
+        progress messages published by ``_send()`` in real time.
+        """
         try:
             message = json.loads(body)
+        except Exception as e:
+            logger.error(f"Erro ao decodificar mensagem: {e}")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+
+        # Acknowledge right away so pika can continue processing I/O (and
+        # flushing outbound publishes scheduled via add_callback_threadsafe).
+        try:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except Exception as e:
+            logger.error(f"Erro ao fazer ack da mensagem: {e}")
+
+        # Run the heavy lifting in a daemon thread
+        worker = Thread(target=self._process_message_worker, args=(message,), daemon=True)
+        worker.start()
+
+    def _process_message_worker(self, message: dict):
+        """Executes the actual message handling in a background thread."""
+        try:
             action = message.get('action')
 
             logger.info(f"Mensagem recebida: {action}")
@@ -282,7 +311,6 @@ class GenericFileTransfer:
                     value_for_log = str(value_for_log)
 
             self.send_message(response, f"recv_queue_index_{str(self.get_index())}")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
 
             self.config_manager.log_operation(
                 response['action'],
@@ -291,8 +319,7 @@ class GenericFileTransfer:
             )
 
         except Exception as e:
-            logger.error(f"Erro ao processar mensagem: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            logger.exception(f"Erro ao processar mensagem no worker: {e}")
 
     def _ensure_remote_dirs(self, remote_dir: str) -> bool:
         """
@@ -352,6 +379,9 @@ class GenericFileTransfer:
         return True
 
     def _handle_upload_directory(self, local_path: str, remote_path: str) -> Dict:
+
+        self._send(ActionTable.STREAM_FILE.value, {'status': 'start', 'message': f'Iniciando upload de diretório para {self.remote.name}: {self.remote.host}'})
+
         import posixpath
         import ntpath
         path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
@@ -421,6 +451,11 @@ class GenericFileTransfer:
                             ok = bool(success)
                         if not ok:
                             upload_errors.append({'file': rel_path, 'error': success})
+                            upload_result = {'success': len(upload_errors) == 0,
+                                             'status': 'error' if len(upload_errors) == 0 else 'error',
+                                             'message': upload_errors}
+                            self._send(ActionTable.FINISH_STREAM_FILE.value, upload_result)
+                            break
                     except Exception as e:
                         upload_errors.append({'file': rel_path, 'error': str(e)})
 
@@ -450,7 +485,7 @@ class GenericFileTransfer:
                         logger.debug("Failed to send progress update for %s", rel_path)
 
                 # if there were upload errors, still attempt verification but mark upload_result accordingly
-                upload_result = {'success': len(upload_errors) == 0, 'errors': upload_errors}
+                upload_result = {'success': len(upload_errors) == 0, 'status': 'done' if len(upload_errors) == 0 else 'error', 'message': upload_errors}
                 self._send(ActionTable.FINISH_STREAM_FILE.value, upload_result)
 
                 # perform verification as before
@@ -512,6 +547,8 @@ class GenericFileTransfer:
 
                 # send verification result
                 verification['success'] = True
+                verification['message'] = f'Iniciando upload de arquivo para {self.remote.name}: {self.remote.host}'
+                verification['status'] = 'done'
                 self._send(ActionTable.FINISH_STREAM_FILE.value, verification)
 
             except Exception as e:
@@ -519,6 +556,7 @@ class GenericFileTransfer:
                 self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': str(e)})
 
         result = self._with_ftp(op)
+        print(f"Upload directory result: {result}", flush=True)
 
         return self._send(ActionTable.STREAM_DIRECTORY.value, result)
 
@@ -973,23 +1011,29 @@ class GenericFileTransfer:
 
                 if ok:
                     logger.info("Template file uploaded to %s with programa.name='%s'", remote_dest, name)
-                    return True, f"File uploaded to {remote_dest}"
+                    return {"success": True, "message": f"Arquivo enviado para: {remote_dest}, para {self.name}: {self.host}"}
                 else:
-                    msg = f"Upload failed: {result}"
+                    msg = f"Envio falhou: {result}, para {self.name}: {self.host}"
                     logger.error(msg)
-                    return False, msg
+                    return {'success': False, 'message': msg}
+            except Exception as e:
+                logger.exception("Error uploading template file")
+                return {'success': False, 'message': f"Erro ao enviar arquivo: {e}, para {self.name}: {self.host}"}
             finally:
                 # clean up temp file
                 try:
                     os.unlink(tmp_path)
                 except Exception:
                     pass
+            return {'success': False, 'message': f'{self.name}: {self.host}'}
 
         result = self._with_ftp(op)
 
-        if result[0]:
-            return self._send(ActionTable.STREAM_FILE.value, {'status': 'done'})
-        return self._send(ActionTable.STREAM_FILE.value, {'status': 'error', 'message': result[1]})
+        if result['success']:
+            result['status'] = 'done'
+            return self._send(ActionTable.STREAM_FILE.value, result)
+        result['status'] = 'error'
+        return self._send(ActionTable.STREAM_FILE.value, result)
 
     def _handle_remote_reboot(self) -> tuple:
         """Send 'sudo reboot' to the remote server via SSH.
@@ -1081,11 +1125,13 @@ class GenericFileTransfer:
 
         result = self._with_ftp(op)
         if result and result.get('success'):
-            return self._send(ActionTable.STREAM_FILE.value, {'status': 'done'})
-
+            return self._send(ActionTable.FINISH_STREAM_FILE.value, {'status': 'done', 'message': f'Finalizado upload de arquivo para {self.remote.name}: {self.remote.host}'})
+        print(f"Upload directory result: {result}", flush=True)
         return result
 
     def _handle_upload_file(self, local_path: str, remote_path: str) -> Dict:
+        self._send(ActionTable.STREAM_FILE.value, {'status': 'start',
+                                                   'message': f'Iniciando upload de arquivo para {self.remote.name}: {self.remote.host}'})
         return self._stream_file(local_path, remote_path, is_upload=True)
 
     def _handle_download_file_stream(self, local_path: str, remote_path: str) -> Dict:

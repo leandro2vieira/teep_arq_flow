@@ -689,11 +689,15 @@ async function loadPeripherals(){
     const res = await fetch('/api/peripherals');
     const data = await res.json();
     if(!data || data.length === 0){ list.innerHTML = '<div class="empty-state">Nenhum periférico encontrado</div>'; return; }
-    const rows = data.map(p => {
+    // Adiciona o total de periféricos
+    let totalInfo = `<div style=\"margin-bottom:8px;font-weight:700;color:#b7e200\">Total de periféricos cadastrados: ${data.length}</div>`;
+    // Enumera os itens da lista
+    const rows = data.map((p, idx) => {
       const proto = ((p.json_connection_params||{}).protocol||'').toLowerCase();
       const isSSH = proto === 'scp' || proto === 'sftp';
       const rebootBtn = isSSH ? `<button class="btn" style="background:rgba(255,80,80,0.15);color:#ff8a8a;border-color:rgba(255,80,80,0.2)" onclick="rebootPeripheral(${p.id}, '${escapeJs(p.name||'')}')">⏻ Reboot</button>` : '';
       return `<tr>
+      <td>${idx+1}</td>
       <td>${p.id}</td>
       <td>${escapeHtml(p.name||'')}</td>
       <td>${escapeHtml(p.interface||'')}</td>
@@ -709,7 +713,7 @@ async function loadPeripherals(){
       </td>
     </tr>`;
     }).join('');
-    list.innerHTML = `<table><thead><tr><th>ID</th><th>Nome</th><th>Interface</th><th>Dispositivo</th><th>Modelo</th><th>Última Atualização</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    list.innerHTML = `${totalInfo}<table><thead><tr><th>#</th><th>ID</th><th>Nome</th><th>Interface</th><th>Dispositivo</th><th>Modelo</th><th>Última Atualização</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   } catch(e){ list.innerHTML = '<div class="empty-state">Erro ao carregar periféricos</div>'; console.error(e); }
 }
 
