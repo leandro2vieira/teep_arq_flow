@@ -139,6 +139,7 @@ class FlaskWebApp:
                 self._trigger_rabbit_reconnect()
                 return jsonify({'id': pid, 'message': 'Peripheral created'}), 201
             except Exception as e:
+                print(f"------- Error creating peripheral: {e}")
                 return jsonify({'error': str(e)}), 400
 
         @self.app.route('/api/peripherals/<int:peripheral_id>', methods=['PUT'])
