@@ -22,6 +22,7 @@ class IO:
         self.remote_side_path = config.get('remote_side_path', './')
         self.reboot_on_upload = config.get('reboot_on_upload', False)
         self.reboot_on_delete = config.get('reboot_on_delete', False)
+        self.list_files = config.get('list_files', True)
         # server_os may be provided in io config or in parent config; default to 'linux'
         self.server_os = config.get('server_os') or config.get('serverOS') or 'linux'
 
@@ -224,6 +225,8 @@ class GenericFileTransfer:
                 result = _handle_list_local_directory(self.io.server_side_path, path)
                 response['action'] = ActionTable.SERVER_FILE_TREE.value
             elif action == ActionTable.GET_REMOTE_FILE_TREE.value:
+                if not self.io.list_files:
+                    return
                 data = message.get('data', {})
                 value = data.get('value', {})
                 path = value.get('remote_path', '')
