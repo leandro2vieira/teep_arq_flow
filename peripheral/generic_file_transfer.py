@@ -1050,7 +1050,7 @@ class GenericFileTransfer:
         return self._send(ActionTable.STREAM_FILE.value, result)
 
     def _handle_remote_permission(self) -> tuple:
-        """Send 'sudo chmod -R 777 robot' to the remote server via SSH.
+        """Send 'sudo chmod -R 777 /home/inexbot/robot/' to the remote server via SSH.
 
         Only supported on SSH-based protocols (scp / sftp).
         Assumes the remote user has passwordless sudo for the reboot command.
@@ -1063,8 +1063,8 @@ class GenericFileTransfer:
             return False, msg
 
         def op():
-            logger.info("Sending 'sudo chmod -R 777' to %s:%s", self.host, self.port)
-            success, output = self.remote.exec_command("chmod -R 777", sudo_password=self.password)
+            logger.info("Sending 'sudo chmod -R 777 /home/inexbot/robot/' to %s:%s", self.host, self.port)
+            success, output = self.remote.exec_command("chmod -R 777 /home/inexbot/robot/", sudo_password=self.password)
             if success:
                 logger.info("Permission command accepted by %s:%s", self.host, self.port)
             else:
