@@ -20,6 +20,7 @@ class IO:
         self.notification_type = config.get('notification_type', 4)
         self.server_side_path = config.get('server_side_path', './')
         self.remote_side_path = config.get('remote_side_path', './')
+        self.make_permission_on_upload = config.get('make_permission_on_upload', False)
         self.reboot_on_upload = config.get('reboot_on_upload', False)
         self.reboot_on_delete = config.get('reboot_on_delete', False)
         self.list_files = config.get('list_files', True)
@@ -237,6 +238,8 @@ class GenericFileTransfer:
                 if self.io.reboot_on_upload:
                     self._handle_remote_reboot()
                 else:
+                    if self.io.make_permission_on_upload:
+                        self._handle_remote_permission()
                     data = message.get('data', {})
                     value = data.get('value', {})
                     local_path = value.get('local_path', '')
@@ -247,6 +250,8 @@ class GenericFileTransfer:
                 if self.io.reboot_on_upload:
                     self._handle_remote_reboot()
                 else:
+                    if self.io.make_permission_on_upload:
+                        self._handle_remote_permission()
                     data = message.get('data', {})
                     value = data.get('value', {})
                     local_path = value.get('local_path', '')
@@ -1043,6 +1048,34 @@ class GenericFileTransfer:
             return self._send(ActionTable.STREAM_FILE.value, result)
         result['status'] = 'error'
         return self._send(ActionTable.STREAM_FILE.value, result)
+
+    def _handle_remote_permission(self) -> tuple:
+        """Send 'sudo chmod -R 777 robot' to the remote server via SSH.
+
+        Only supported on SSH-based protocols (scp / sftp).
+        Assumes the remote user has passwordless sudo for the reboot command.
+        Returns (bool, str) tuple.
+        """
+        proto = (self.protocol or '').lower()
+        if proto not in ('scp', 'sftp'):
+            msg = "permission only supported on SSH-based protocols (scp/sftp)"
+            logger.warning(msg)
+            return False, msg
+
+        def op():
+            logger.info("Sending 'sudo chmod -R 777' to %s:%s", self.host, self.port)
+            success, output = self.remote.exec_command("chmod -R 777", sudo_password=self.password)
+            if success:
+                logger.info("Permission command accepted by %s:%s", self.host, self.port)
+            else:
+                logger.error("Permission command failed on %s:%s -> %s", self.host, self.port, output)
+            return success, output
+
+        result = self._with_ftp(op)
+        # _with_ftp may wrap exceptions into {'success': False, 'error': ...}
+        if isinstance(result, dict):
+            return result.get('success', False), result.get('error', 'unknown error')
+        return result
 
     def _handle_remote_reboot(self) -> tuple:
         """Send 'sudo reboot' to the remote server via SSH.
