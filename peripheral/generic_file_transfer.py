@@ -244,10 +244,12 @@ class GenericFileTransfer:
                 remote_path = value.get('remote_path', '')
                 result = self._handle_upload_directory(local_path, remote_path)
                 if self.io.reboot_on_upload:
+                    logger.info(f"Reboot em: {self.host} - {self.name}")
                     self._handle_remote_reboot()
+                else:
+                    logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             elif action == ActionTable.STREAM_FILE.value:
                 # reboot server
-
                 if self.io.make_permission_on_upload:
                     self._handle_remote_permission()
                 data = message.get('data', {})
@@ -256,7 +258,10 @@ class GenericFileTransfer:
                 remote_path = value.get('remote_path', '')
                 result = self._handle_upload_file(local_path, remote_path)
                 if self.io.reboot_on_upload:
+                    logger.info(f"Reboot em: {self.host} - {self.name}")
                     self._handle_remote_reboot()
+                else:
+                    logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             elif action == ActionTable.DOWNLOAD_FILE.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
