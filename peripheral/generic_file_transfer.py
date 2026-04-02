@@ -1092,7 +1092,7 @@ class GenericFileTransfer:
 
         def op():
             logger.info("Sending 'sudo reboot' to %s:%s", self.host, self.port)
-            success, output = self.remote.exec_command("reboot", sudo_password=self.password)
+            success, output = self.remote.exec_command("sudo reboot", sudo_password=self.password)
             if success:
                 logger.info("Reboot command accepted by %s:%s", self.host, self.port)
             else:
