@@ -1064,7 +1064,7 @@ class GenericFileTransfer:
 
         def op():
             logger.info("Sending 'sudo chmod -R 777 /home/inexbot/robot/' to %s:%s", self.host, self.port)
-            success, output = self.remote.exec_command("chmod -R 777 /home/inexbot/robot/", sudo_password=self.password)
+            success, output = self.remote.exec_command("sudo chmod -R 777 /home/inexbot/robot/", sudo_password=self.password)
             if success:
                 logger.info("Permission command accepted by %s:%s", self.host, self.port)
             else:
