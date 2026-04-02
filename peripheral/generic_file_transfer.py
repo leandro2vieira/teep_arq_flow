@@ -304,6 +304,11 @@ class GenericFileTransfer:
                 local_path = value.get('local_path', '')
                 remote_path = value.get('remote_path', '')
                 result = self._handle_create_file_from_template(name, local_path, remote_path)
+                if self.io.reboot_on_upload:
+                    logger.info(f"Reboot em: {self.host} - {self.name}")
+                    self._handle_remote_reboot()
+                else:
+                    logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             else:
                 response['action'] = ActionTable.ERROR.value
                 result = f" Comando desconhecido: {action}"
