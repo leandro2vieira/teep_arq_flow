@@ -989,7 +989,7 @@ class GenericFileTransfer:
             if not isinstance(program_list, list):
                 continue
             for prog in program_list:
-                if isinstance(prog, dict) and prog.get('port') == 2:
+                if isinstance(prog, dict) and prog.get('port') == 5:
                     prog['name'] = name
                     target_found = True
                     break
