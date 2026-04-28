@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import re
+import shutil
 from datetime import datetime
 from typing import Dict, Any, List, Tuple
 from ftp_manager import FTPManager
@@ -212,6 +214,7 @@ class GenericFileTransfer:
 
     def _process_message_worker(self, message: dict):
         """Executes the actual message handling in a background thread."""
+        result = None
         try:
             action = message.get('action')
 
@@ -274,8 +277,7 @@ class GenericFileTransfer:
                 value = data.get('value', {})
                 local_path = value.get('local_path', '')
                 remote_path = value.get('remote_path', '')
-                # result = self._handle_download_directory(local_path, remote_path)
-                result = self._handle_download_file(local_path, remote_path)
+                result = self._handle_download_directory(local_path, remote_path)
 
             elif action == ActionTable.DELETE_REMOTE_FILE.value:
                 # reboot server
@@ -617,29 +619,51 @@ class GenericFileTransfer:
             logger.error(f"Erro ao listar diretório remoto {path}: {e}")
             return []
 
+    def _resolve_download_target_name(self, local_path: str, remote_path: str) -> str:
+        candidates = [
+            os.path.basename((remote_path or '').rstrip('/\\').replace('\\', '/')),
+            os.path.basename((local_path or '').rstrip('/\\').replace('\\', '/')),
+        ]
+
+        for candidate in candidates:
+            if candidate and candidate not in ('.', '..'):
+                return candidate
+
+        raise ValueError('Não foi possível determinar o nome do destino local do download')
+
+    def _get_next_download_version_dir(self) -> str:
+        server_base_path = self.io.server_side_path.rstrip('/\\') or os.sep
+        old_root = os.path.join(server_base_path, 'old')
+        os.makedirs(old_root, exist_ok=True)
+
+        max_version = 0
+        with os.scandir(old_root) as entries:
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                match = re.fullmatch(r'V(\d+)', entry.name)
+                if match:
+                    max_version = max(max_version, int(match.group(1)))
+
+        version_dir = os.path.join(old_root, f'V{max_version + 1}')
+        os.makedirs(version_dir, exist_ok=True)
+        return version_dir
+
+    def _prepare_local_download_target(self, local_path: str, remote_path: str) -> str:
+        server_base_path = self.io.server_side_path.rstrip('/\\') or os.sep
+        target_name = self._resolve_download_target_name(local_path, remote_path)
+        target_path = os.path.join(server_base_path, target_name)
+
+        if os.path.exists(target_path):
+            version_dir = self._get_next_download_version_dir()
+            archived_path = os.path.join(version_dir, target_name)
+            logger.info('Arquivando destino local existente %s -> %s', target_path, archived_path)
+            shutil.move(target_path, archived_path)
+
+        return target_path
+
     def _handle_download_file(self, local_path: str, remote_path: str) -> Dict:
-        import posixpath
-        import ntpath
-        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
-
-        # preserve original inputs (passed by caller) to derive safe folder names
-        original_local_input = (local_path or '').rstrip('/\\')
-        original_remote_input = (remote_path or '').rstrip('/\\')
-
-        # compute safe base names (remove any path separators so we get a single name)
-        local_base = os.path.basename(original_local_input) if original_local_input else ''
-        remote_base = os.path.basename(original_remote_input.replace('\\', '/')) if original_remote_input else ''
-
-        # build timestamp string DDMMYYYY_HHMMSS
-        timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
-
-        folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
-
-        # ensure folder_name contains no slashes
-        folder_name = folder_name.replace('/', '_').replace('\\', '_')
-
-        # final local_path is server_side_path joined with the composed folder_name
-        local_path = os.path.join(self.io.server_side_path.rstrip('/\\'), folder_name)
+        local_path = self._prepare_local_download_target(local_path, remote_path)
         print(f"Local path to save: {local_path}", flush=True)
 
         remote_path = _join_path(self.io.remote_side_path, remote_path)
@@ -663,26 +687,8 @@ class GenericFileTransfer:
     def _handle_download_directory(self, local_path: str, remote_path: str) -> Dict:
         import posixpath
         import ntpath
-        path_mod = posixpath if getattr(self.io, 'server_os', 'linux') == 'linux' else ntpath
 
-        # preserve original inputs (passed by caller) to derive safe folder names
-        original_local_input = (local_path or '').rstrip('/\\')
-        original_remote_input = (remote_path or '').rstrip('/\\')
-
-        # compute safe base names (remove any path separators so we get a single name)
-        local_base = os.path.basename(original_local_input) if original_local_input else ''
-        remote_base = os.path.basename(original_remote_input.replace('\\', '/')) if original_remote_input else ''
-
-        # build timestamp string DDMMYYYY_HHMMSS
-        timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
-
-        folder_name = f"download_{timestamp}_{remote_base}" if remote_base else f"download_{timestamp}"
-
-        # ensure folder_name contains no slashes
-        folder_name = folder_name.replace('/', '_').replace('\\', '_')
-
-        # final local_path is server_side_path joined with the composed folder_name
-        local_path = os.path.join(self.io.server_side_path.rstrip('/\\'), folder_name)
+        local_path = self._prepare_local_download_target(local_path, remote_path)
         print(f"Local path to save: {local_path}", flush=True)
 
         remote_path = _join_path(self.io.remote_side_path, remote_path)
