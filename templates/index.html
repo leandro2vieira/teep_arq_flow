@@ -50,7 +50,20 @@
   .empty-state{padding:36px;text-align:center;color:var(--muted)}
   .modal{position:fixed;inset:0;display:none;justify-content:center;align-items:center;background:rgba(0,0,0,0.6);z-index:999}
   .modal.active{display:flex}
-  .modal-card{width:720px;max-width:96%;background:linear-gradient(180deg,#0f1316,#13171a);border-radius:10px;padding:18px;border:1px solid rgba(255,255,255,0.04);box-shadow:0 20px 60px rgba(0,0,0,0.7)}
+  .modal-card{
+    width:720px;
+    max-width:96%;
+    height:640px; /* fixed-ish height for create/edit popups */
+    max-height:90vh; /* ensure it fits on small screens */
+    overflow:auto; /* enable scrolling when content exceeds available space */
+    -webkit-overflow-scrolling: touch;
+    background:linear-gradient(180deg,#0f1316,#13171a);
+    border-radius:10px;
+    padding:18px;
+    box-sizing: border-box;
+    border:1px solid rgba(255,255,255,0.04);
+    box-shadow:0 20px 60px rgba(0,0,0,0.7)
+  }
   .modal-card h2{margin:0 0 10px 0;color:var(--accent-2);font-weight:800}
   .form-group{margin-bottom:12px}
   label{display:block;font-size:0.85rem;color:var(--muted);margin-bottom:6px;font-weight:700}
