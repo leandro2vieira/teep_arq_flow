@@ -36,7 +36,7 @@ class FTPManager:
         self.name = name
         self.ftp: Optional[FTP] = None
 
-    def connect(self) -> bool:
+    def connect(self) -> Tuple[bool, str]:
         try:
             self.ftp = FTP_TLS() if self.use_tls else FTP()
             # set timeout where supported
@@ -57,11 +57,11 @@ class FTPManager:
                 except Exception:
                     pass
             logger.info("FTP connected: %s", self.host)
-            return True
+            return True, ""
         except Exception as e:
             logger.error("Failed to connect FTP: %s", e)
             self.ftp = None
-            return False
+            return False, str(e)
 
     def disconnect(self) -> None:
         if not self.ftp:
@@ -89,7 +89,8 @@ class FTPManager:
                 self.disconnect()
             except Exception:
                 pass
-            return self.connect()
+            success, _ = self.connect()
+            return success
         except Exception as e:
             logger.debug("_reconnect failed: %s", e)
             return False

@@ -44,12 +44,13 @@ class SFTPManager:
             self._last_error = f"socket_connect_failed: {err}"
             return False
 
-    def connect(self) -> bool:
+    def connect(self) -> Tuple[bool, str]:
         # quick reachability check
         try:
             if not self.test_socket_connect():
-                logger.error("SFTP connect error: cannot reach %s:%s (TCP connect failed) - %s", self.host, self.port, self._last_error)
-                return False
+                msg = f"cannot reach {self.host}:{self.port} (TCP connect failed) - {self._last_error}"
+                logger.error("SFTP connect error: %s", msg)
+                return False, msg
         except Exception:
             pass
 
@@ -63,7 +64,7 @@ class SFTPManager:
                              look_for_keys=bool(self.key_filename is None))
             self.sftp = self.ssh.open_sftp()
             logger.info("SFTP connected: %s:%s", self.host, self.port)
-            return True
+            return True, ""
         except Exception as e:
             err = repr(e)
             logger.error("SFTP connect error: %s", err)
@@ -72,7 +73,7 @@ class SFTPManager:
                 self.disconnect()
             except Exception:
                 pass
-            return False
+            return False, err
 
     def _reconnect(self) -> bool:
         """Force a fresh connection: disconnect any existing session and connect anew."""
@@ -82,7 +83,8 @@ class SFTPManager:
                 self.disconnect()
             except Exception:
                 pass
-            return self.connect()
+            success, _ = self.connect()
+            return success
         except Exception as e:
             logger.debug("_reconnect failed: %s", e)
             return False

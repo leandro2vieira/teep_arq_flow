@@ -172,13 +172,14 @@ class GenericFileTransfer:
 
     # Wrapper that ensures FTP connection and disconnect
     def _with_ftp(self, func, *args, **kwargs):
-        if not self.remote.connect():
-            return {'success': False, 'error': 'Falha ao conectar FTP', 'message': 'Falha ao conectar FTP', 'status': 'error'}
+        success, error_msg = self.remote.connect()
+        if not success:
+            return {'success': False, 'error': f'Falha ao conectar FTP em {self.remote.name}: {self.remote.host} - {error_msg}', 'message': f'Falha ao conectar FTP em {self.remote.name}: {self.remote.host} - {error_msg}', 'status': 'error'}
         try:
             return func(*args, **kwargs)
         except Exception as e:
             logger.exception("FTP operation failed: %s", e)
-            return {'success': False, 'error': str(e), 'message': str(e), 'status': 'error'}
+            return {'success': False, 'error': f'{str(e)}: {self.remote.name}', 'message': f'{str(e)}: {self.remote.name}', 'status': 'error'}
         finally:
             try:
                 self.remote.disconnect()
@@ -323,7 +324,7 @@ class GenericFileTransfer:
                 if success:
                     value_obj = {'success': True, 'message': '', 'result': payload}
                 else:
-                    value_obj = {'success': False, 'message': str(payload), 'result': None}
+                    value_obj = {'success': False, 'message': f'{str(payload)}, {self.remote.name}: {self.remote.host}', 'result': None}
             else:
                 value_obj = result
 
@@ -579,7 +580,7 @@ class GenericFileTransfer:
 
             except Exception as e:
                 logger.exception("Error processing directory upload")
-                self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': str(e)})
+                self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': f'{str(e)}, {self.remote.name}: {self.remote.host}'})
 
         result = self._with_ftp(op)
         print(f"Upload directory result: {result}", flush=True)
@@ -879,7 +880,7 @@ class GenericFileTransfer:
 
             except Exception as e:
                 logger.exception("Error processing directory download")
-                self._send(ActionTable.DOWNLOAD_FILE.value, {'success': False, 'error': str(e)})
+                self._send(ActionTable.DOWNLOAD_FILE.value, {'success': False, 'error': f'{str(e)}, {self.remote.name}: {self.remote.host}'})
                 return verification
 
         result = self._with_ftp(op)
@@ -1045,7 +1046,7 @@ class GenericFileTransfer:
                 else:
                     msg = f"Envio falhou: {result}, para {self.name}: {self.host}"
                     logger.error(msg)
-                    return {'success': False, 'message': msg}
+                    return {'success': False, 'message': f'{msg}, {self.remote.name}: {self.remote.host}'}
             except Exception as e:
                 logger.exception("Error uploading template file")
                 return {'success': False, 'message': f"Erro ao enviar arquivo: {e}, para {self.name}: {self.host}"}
@@ -1158,7 +1159,7 @@ class GenericFileTransfer:
                         pass
 
                     if exists:
-                        return {'success': False, 'error': 'Arquivo remoto já existe'}
+                        return {'success': False, 'error': f'Arquivo remoto já existe, {self.name}: {self.host}'}
 
                     # perform the upload
                     result = self.remote.upload_file(local_file, remote_file)
@@ -1170,7 +1171,7 @@ class GenericFileTransfer:
                     exists = os.path.exists(local_file)
 
                     if exists:
-                        return {'success': False, 'error': 'Arquivo local já existe'}
+                        return {'success': False, 'error': f'Arquivo local já existe, {self.name}: {self.host}'}
 
                     # perform the download
                     result = self.remote.download_file(remote_file, local_file)
@@ -1179,7 +1180,7 @@ class GenericFileTransfer:
                     return {'success': bool(result)}
             except Exception as e:
                 logger.exception("Error streaming file")
-                return {'success': False, 'error': str(e)}
+                return {'success': False, 'error': f'{str(e)}, , {self.name}: {self.host}'}
 
         result = self._with_ftp(op)
         if result and result.get('success'):

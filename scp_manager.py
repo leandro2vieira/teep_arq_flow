@@ -43,12 +43,13 @@ class SCPManager:
             logger.debug("socket test failed for %s:%s -> %s", self.host, self.port, e)
             return False
 
-    def connect(self) -> bool:
+    def connect(self) -> Tuple[bool, str]:
         # quick reachability check to provide a clearer error when port/host is unreachable
         try:
             if not self.test_socket_connect():
-                logger.error("SSH connect error: cannot reach %s:%s (low-level TCP connect failed)", self.host, self.port)
-                return False
+                err_msg = f"cannot reach {self.host}:{self.port} (low-level TCP connect failed)"
+                logger.error("SSH connect error: %s", err_msg)
+                return False, err_msg
         except Exception:
             # ignore test failure and continue to attempt paramiko connect; paramiko will produce useful logs
             pass
@@ -74,12 +75,13 @@ class SCPManager:
                 except Exception:
                     self.scp = None
             logger.info("Connected to SSH/SFTP: %s:%s", self.host, self.port)
-            return True
+            return True, ""
         except Exception as e:
             # include exception repr for more detail (e.g. [Errno None] Unable to connect to port 22)
+            err_msg = repr(e)
             logger.error("SSH connect error: %r", e)
             self.disconnect()
-            return False
+            return False, err_msg
 
     def disconnect(self) -> None:
         try:
@@ -223,8 +225,9 @@ class SCPManager:
 
         # ensure connection
         if not self.sftp or not self.ssh:
-            if not self.connect():
-                return {'success': False, 'error': 'not connected'}
+            success, error_msg = self.connect()
+            if not success:
+                return {'success': False, 'error': error_msg or 'not connected'}
 
         path = remote_path
 
@@ -380,8 +383,9 @@ class SCPManager:
 
         # ensure connection
         if not self.sftp or not self.ssh:
-            if not self.connect():
-                logger.error("list_remote: not connected and connect() failed")
+            success, error_msg = self.connect()
+            if not success:
+                logger.error("list_remote: not connected and connect() failed: %s", error_msg)
                 return results
 
         seen = 0
