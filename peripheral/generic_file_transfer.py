@@ -224,6 +224,8 @@ class GenericFileTransfer:
             response = self._build_response(action)
 
             if action == ActionTable.GET_SERVER_FILE_TREE.value:
+                if not self.io.list_files:
+                    return
                 data = message.get('data', {})
                 value = data.get('value', {})
                 path = value.get('local_path', '')
