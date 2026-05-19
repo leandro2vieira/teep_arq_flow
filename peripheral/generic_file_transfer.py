@@ -26,6 +26,7 @@ class IO:
         self.reboot_on_upload = config.get('reboot_on_upload', False)
         self.reboot_on_delete = config.get('reboot_on_delete', False)
         self.list_files = config.get('list_files', True)
+        self.send_files = config.get('send_files', True)
         # server_os may be provided in io config or in parent config; default to 'linux'
         self.server_os = config.get('server_os') or config.get('serverOS') or 'linux'
 
@@ -243,29 +244,31 @@ class GenericFileTransfer:
                 # reboot server
 
                 if self.io.make_permission_on_upload:
-                    self._handle_remote_permission()
-                data = message.get('data', {})
-                value = data.get('value', {})
-                local_path = value.get('local_path', '')
-                remote_path = value.get('remote_path', '')
-                result = self._handle_upload_directory(local_path, remote_path)
+                    self._handle_remote_permission(action)
+                if self.io.send_files:
+                    data = message.get('data', {})
+                    value = data.get('value', {})
+                    local_path = value.get('local_path', '')
+                    remote_path = value.get('remote_path', '')
+                    result = self._handle_upload_directory(local_path, remote_path)
                 if self.io.reboot_on_upload:
                     logger.info(f"Reboot em: {self.host} - {self.name}")
-                    self._handle_remote_reboot()
+                    self._handle_remote_reboot(action)
                 else:
                     logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             elif action == ActionTable.STREAM_FILE.value:
                 # reboot server
                 if self.io.make_permission_on_upload:
-                    self._handle_remote_permission()
-                data = message.get('data', {})
-                value = data.get('value', {})
-                local_path = value.get('local_path', '')
-                remote_path = value.get('remote_path', '')
-                result = self._handle_upload_file(local_path, remote_path)
+                    self._handle_remote_permission(action)
+                if self.io.send_files:
+                    data = message.get('data', {})
+                    value = data.get('value', {})
+                    local_path = value.get('local_path', '')
+                    remote_path = value.get('remote_path', '')
+                    result = self._handle_upload_file(local_path, remote_path)
                 if self.io.reboot_on_upload:
                     logger.info(f"Reboot em: {self.host} - {self.name}")
-                    self._handle_remote_reboot()
+                    self._handle_remote_reboot(action)
                 else:
                     logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             elif action == ActionTable.DOWNLOAD_FILE.value:
@@ -285,7 +288,7 @@ class GenericFileTransfer:
             elif action == ActionTable.DELETE_REMOTE_FILE.value:
                 # reboot server
                 if self.io.reboot_on_delete:
-                    self._handle_remote_reboot()
+                    self._handle_remote_reboot(action)
                 else:
                     data = message.get('data', {})
                     value = data.get('value', {})
@@ -294,14 +297,14 @@ class GenericFileTransfer:
             elif action == ActionTable.DELETE_REMOTE_DIRECTORY.value:
                  # reboot server
                 if self.io.reboot_on_delete:
-                    self._handle_remote_reboot()
+                    self._handle_remote_reboot(action)
                 else:
                     data = message.get('data', {})
                     value = data.get('value', {})
                     remote_path = value.get('remote_path', '')
                     result = self._handle_delete_remote_directory(remote_path)
             elif action == ActionTable.REMOTE_REBOOT.value:
-                result = self._handle_remote_reboot()
+                result = self._handle_remote_reboot(action)
             elif action == ActionTable.CREATE_FILE_FROM_TEMPLATE.value:
                 data = message.get('data', {})
                 value = data.get('value', {})
@@ -311,7 +314,7 @@ class GenericFileTransfer:
                 result = self._handle_create_file_from_template(name, local_path, remote_path)
                 if self.io.reboot_on_upload:
                     logger.info(f"Reboot em: {self.host} - {self.name}")
-                    self._handle_remote_reboot()
+                    self._handle_remote_reboot(action)
                 else:
                     logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             else:
@@ -963,8 +966,9 @@ class GenericFileTransfer:
         )
 
         if not os.path.isfile(template_abs):
-            msg = f"Template file not found: {template_abs}"
+            msg = f"Template não encontrado: {template_abs} para {self.remote.name} / {self.remote.host}"
             logger.error(msg)
+            self._send(ActionTable.STREAM_FILE.value, {'success': False, 'status': 'error', 'error': msg, 'message': msg})
             return False, msg
 
         # read and parse the JSON template
@@ -972,22 +976,26 @@ class GenericFileTransfer:
             with open(template_abs, 'r', encoding='utf-8') as f:
                 template_data = json.load(f)
         except Exception as e:
-            msg = f"Failed to read/parse template JSON: {e}"
+            msg = f"Failed to read/parse template JSON: {e} for {self.remote.name} / {self.remote.host}"
             logger.error(msg)
+            self._send(ActionTable.STREAM_FILE.value, {'success': False, 'status': 'error', 'error': msg, 'message': msg})
             return False, msg
 
         # set programa.name in the template
         if not isinstance(template_data, dict):
-            msg = "Template JSON root is not a dict"
+            msg = f"Template JSON root is not a dict for {self.remote.name} / {self.remote.host}"
             logger.error(msg)
+            self._send(ActionTable.STREAM_FILE.value,
+                       {'success': False, 'status': 'error', 'error': msg, 'message': msg})
             return False, msg
 
         # Navigate to RemoteIO (list of objects), each containing a 'program' list.
         # Find the program object with port == 2 and replace its name.
         remote_io_list = template_data.get('RemoteIO')
         if not isinstance(remote_io_list, list):
-            msg = "Template JSON 'RemoteIO' is not a list"
+            msg = f"Template JSON 'RemoteIO' is not a list for {self.remote.name} / {self.remote.host}"
             logger.error(msg)
+            self._send(ActionTable.STREAM_FILE.value, {'success': False, 'status': 'error', 'error': msg, 'message': msg})
             return False, msg
 
         target_found = False
@@ -1006,7 +1014,7 @@ class GenericFileTransfer:
                 break
 
         if not target_found:
-            msg = "No program object with port == 2 found in RemoteIO[].program[]"
+            msg = f"No program object with port == 2 found in RemoteIO[].program[] for {self.remote.name} / {self.remote.host}"
             logger.error(msg)
             return False, msg
 
@@ -1016,7 +1024,7 @@ class GenericFileTransfer:
             with os.fdopen(tmp_fd, 'w', encoding='utf-8') as tmp_f:
                 json.dump(template_data, tmp_f, ensure_ascii=False, indent=2)
         except Exception as e:
-            msg = f"Failed to write temporary file: {e}"
+            msg = f"Failed to write temporary file: {e} for {self.remote.name} / {self.remote.host}"
             logger.error(msg)
             return False, msg
 
@@ -1068,7 +1076,7 @@ class GenericFileTransfer:
         result['status'] = 'error'
         return self._send(ActionTable.STREAM_FILE.value, result)
 
-    def _handle_remote_permission(self) -> tuple:
+    def _handle_remote_permission(self, action) -> tuple:
         """Send 'sudo chmod -R 777 /home/inexbot/robot/' to the remote server via SSH.
 
         Only supported on SSH-based protocols (scp / sftp).
@@ -1077,7 +1085,8 @@ class GenericFileTransfer:
         """
         proto = (self.protocol or '').lower()
         if proto not in ('scp', 'sftp'):
-            msg = "permission only supported on SSH-based protocols (scp/sftp)"
+            msg = f"Só é possível dar permissão em diretórios em protocolos (scp/sftp) baseados em SSH  {self.remote.name} / {self.remote.host}"
+            self._send(action, {'success': False, 'status': 'error', 'message': msg, 'error': msg})
             logger.warning(msg)
             return False, msg
 
@@ -1088,15 +1097,18 @@ class GenericFileTransfer:
                 logger.info("Permission command accepted by %s:%s", self.host, self.port)
             else:
                 logger.error("Permission command failed on %s:%s -> %s", self.host, self.port, output)
+            logger.info(f"Success: {success} - Output: {output}")
             return success, output
 
-        result = self._with_ftp(op)
+        success, result = self._with_ftp(op)
         # _with_ftp may wrap exceptions into {'success': False, 'error': ...}
+        msg = f"Permissão {'concedida' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
+        self._send(action, {'success': success, 'status': 'done', 'message': msg})
         if isinstance(result, dict):
             return result.get('success', False), result.get('error', 'unknown error')
-        return result
+        return True, result
 
-    def _handle_remote_reboot(self) -> tuple:
+    def _handle_remote_reboot(self, action) -> tuple:
         """Send 'sudo reboot' to the remote server via SSH.
 
         Only supported on SSH-based protocols (scp / sftp).
@@ -1116,13 +1128,18 @@ class GenericFileTransfer:
                 logger.info("Reboot command accepted by %s:%s", self.host, self.port)
             else:
                 logger.error("Reboot command failed on %s:%s -> %s", self.host, self.port, output)
+
+            logger.info(f"Success: {success} - Output: {output}")
             return success, output
 
-        result = self._with_ftp(op)
+        success, result = self._with_ftp(op)
+        msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
+        self._send(action, {'success': success, 'status': 'done', 'message': msg})
+
         # _with_ftp may wrap exceptions into {'success': False, 'error': ...}
         if isinstance(result, dict):
             return result.get('success', False), result.get('error', 'unknown error')
-        return result
+        return success, result
 
     # --- file and directory streaming ------------------------------------------------
 

@@ -50,7 +50,7 @@ def main():
 
     config_manager = ConfigManager()
     # Obter porta da web do config ou usar padrão
-    web_port = config_manager.get('web_port', 5000)
+    web_port = config_manager.get('web_port', 5001)
 
     # Iniciar serviço RabbitMQ na thread principal
     rabbitmq_service = RabbitMQService(config_manager, command_queue)
