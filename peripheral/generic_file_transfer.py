@@ -1014,17 +1014,21 @@ class GenericFileTransfer:
                 break
 
         if not target_found:
-            msg = f"No program object with port == 2 found in RemoteIO[].program[] for {self.remote.name} / {self.remote.host}"
+            msg = f"No program object with port == 5 found in RemoteIO[].program[] for {self.remote.name} / {self.remote.host}"
+            self._send(ActionTable.STREAM_FILE.value,
+                       {'success': False, 'status': 'error', 'error': msg, 'message': msg})
             logger.error(msg)
             return False, msg
 
         # write the modified JSON to a temporary file
         try:
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json', prefix='template_')
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json', prefix=f'template_{self.io.index}')
             with os.fdopen(tmp_fd, 'w', encoding='utf-8') as tmp_f:
                 json.dump(template_data, tmp_f, ensure_ascii=False, indent=2)
         except Exception as e:
             msg = f"Failed to write temporary file: {e} for {self.remote.name} / {self.remote.host}"
+            self._send(ActionTable.STREAM_FILE.value,
+                       {'success': False, 'status': 'error', 'error': msg, 'message': msg})
             logger.error(msg)
             return False, msg
 
@@ -1056,9 +1060,14 @@ class GenericFileTransfer:
                 else:
                     msg = f"Envio falhou: {result}, para {self.name}: {self.host}"
                     logger.error(msg)
+                    self._send(ActionTable.STREAM_FILE.value,
+                               {'success': False, 'status': 'error', 'error': msg, 'message': msg})
                     return {'success': False, 'message': f'{msg}, {self.remote.name}: {self.remote.host}'}
             except Exception as e:
-                logger.exception("Error uploading template file")
+                msg = f"Error uploading template file: {e}, for {self.name}: {self.host}"
+                logger.exception(msg)
+                self._send(ActionTable.STREAM_FILE.value,
+                           {'success': False, 'status': 'error', 'error': msg, 'message': msg})
                 return {'success': False, 'message': f"Erro ao enviar arquivo: {e}, para {self.name}: {self.host}"}
             finally:
                 # clean up temp file
