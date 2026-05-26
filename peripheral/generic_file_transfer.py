@@ -1129,13 +1129,19 @@ class GenericFileTransfer:
         if isinstance(result, dict):
             success = result.get('success', False)
             msg = f"Permissão {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
-            self._send(action, {'success': success, 'status': 'done', 'message': msg})
+            payload = {'success': success, 'status': 'done', 'message': msg}
+            if not success:
+                payload['error'] = msg
+            self._send(action, payload)
             return success, result.get('error', 'unknown error')
 
         # fallback if op() returns tuple-like data
         success, output = result
-        msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
-        self._send(action, {'success': success, 'status': 'done', 'message': msg})
+        msg = f"Permissão {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
+        payload = {'success': success, 'status': 'done', 'message': msg}
+        if not success:
+            payload['error'] = msg
+        self._send(action, payload)
         return success, output
 
     def _handle_remote_reboot(self, action) -> tuple:
@@ -1167,13 +1173,19 @@ class GenericFileTransfer:
         if isinstance(result, dict):
             success = result.get('success', False)
             msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
-            self._send(action, {'success': success, 'status': 'done', 'message': msg})
+            payload = {'success': success, 'status': 'done', 'message': msg}
+            if not success:
+                payload['error'] = msg
+            self._send(action, payload)
             return success, result.get('error', 'unknown error')
 
         # fallback if op() returns tuple-like data
         success, output = result
         msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
-        self._send(action, {'success': success, 'status': 'done', 'message': msg})
+        payload = {'success': success, 'status': 'done', 'message': msg}
+        if not success:
+            payload['error'] = msg
+        self._send(action, payload)
         return success, output
 
     # --- file and directory streaming ------------------------------------------------
