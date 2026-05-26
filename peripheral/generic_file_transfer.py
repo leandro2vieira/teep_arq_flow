@@ -1132,6 +1132,7 @@ class GenericFileTransfer:
             payload = {'success': success, 'status': 'done', 'message': msg}
             if not success:
                 payload['error'] = msg
+                payload['status'] = 'error'
             self._send(action, payload)
             return success, result.get('error', 'unknown error')
 
@@ -1141,6 +1142,7 @@ class GenericFileTransfer:
         payload = {'success': success, 'status': 'done', 'message': msg}
         if not success:
             payload['error'] = msg
+            payload['status'] = 'error'
         self._send(action, payload)
         return success, output
 
@@ -1176,6 +1178,7 @@ class GenericFileTransfer:
             payload = {'success': success, 'status': 'done', 'message': msg}
             if not success:
                 payload['error'] = msg
+                payload['status'] = 'error'
             self._send(action, payload)
             return success, result.get('error', 'unknown error')
 
@@ -1185,6 +1188,7 @@ class GenericFileTransfer:
         payload = {'success': success, 'status': 'done', 'message': msg}
         if not success:
             payload['error'] = msg
+            payload['status'] = 'error'
         self._send(action, payload)
         return success, output
 
