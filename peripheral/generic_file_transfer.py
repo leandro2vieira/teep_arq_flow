@@ -175,12 +175,27 @@ class GenericFileTransfer:
     def _with_ftp(self, func, *args, **kwargs):
         success, error_msg = self.remote.connect()
         if not success:
-            return {'success': False, 'error': f'Falha ao conectar FTP em {self.remote.name}: {self.remote.host} - {error_msg}', 'message': f'Falha ao conectar FTP em {self.remote.name}: {self.remote.host} - {error_msg}', 'status': 'error'}
+            return False, {
+                'success': False,
+                'error': f'Falha ao conectar FTP em {self.remote.name}: {self.remote.host} - {error_msg}',
+                'message': f'Falha ao conectar FTP em {self.remote.name}: {self.remote.host} - {error_msg}',
+                'status': 'error'
+            }
         try:
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
+            if isinstance(result, dict):
+                return result.get('success', False), result
+            if isinstance(result, tuple) and len(result) == 2:
+                return result
+            return True, result
         except Exception as e:
             logger.exception("FTP operation failed: %s", e)
-            return {'success': False, 'error': f'{str(e)}: {self.remote.name}', 'message': f'{str(e)}: {self.remote.name}', 'status': 'error'}
+            return False, {
+                'success': False,
+                'error': f'{str(e)}: {self.remote.name}',
+                'message': f'{str(e)}: {self.remote.name}',
+                'status': 'error'
+            }
         finally:
             try:
                 self.remote.disconnect()
@@ -587,7 +602,7 @@ class GenericFileTransfer:
                 logger.exception("Error processing directory upload")
                 self._send(ActionTable.FINISH_STREAM_FILE.value, {'success': False, 'error': f'{str(e)}, {self.remote.name}: {self.remote.host}'})
 
-        result = self._with_ftp(op)
+        success, result = self._with_ftp(op)
         print(f"Upload directory result: {result}", flush=True)
 
         return self._send(ActionTable.STREAM_DIRECTORY.value, result)
@@ -684,8 +699,8 @@ class GenericFileTransfer:
                 return result
             return {'success': bool(result)}
 
-        result = self._with_ftp(op)
-        if result and result.get('success'):
+        success, result = self._with_ftp(op)
+        if result and success:
             return self._send(ActionTable.DOWNLOAD_FILE.value, {'status': 'done'})
 
         return result
@@ -888,8 +903,8 @@ class GenericFileTransfer:
                 self._send(ActionTable.DOWNLOAD_FILE.value, {'success': False, 'error': f'{str(e)}, {self.remote.name}: {self.remote.host}'})
                 return verification
 
-        result = self._with_ftp(op)
-        if result and result.get('success'):
+        success, result = self._with_ftp(op)
+        if result and success:
             return self._send(ActionTable.DOWNLOAD_FILE.value, {'status': 'done'})
 
         return result
@@ -903,8 +918,8 @@ class GenericFileTransfer:
                 return result
             return {'success': bool(result)}
 
-        result = self._with_ftp(op)
-        if result and result.get('success'):
+        success, result = self._with_ftp(op)
+        if result and success:
             return self._send(ActionTable.DELETE_REMOTE_FILE.value, {'status': 'done'})
 
         return result
@@ -940,8 +955,8 @@ class GenericFileTransfer:
                 return result
             return {'success': bool(result)}
 
-        result = self._with_ftp(op)
-        if result and result.get('success'):
+        success, result = self._with_ftp(op)
+        if result and success:
             return self._send(ActionTable.DELETE_REMOTE_DIRECTORY.value, {'status': 'done'})
 
         return result
@@ -1077,9 +1092,9 @@ class GenericFileTransfer:
                     pass
             return {'success': False, 'message': f'{self.name}: {self.host}'}
 
-        result = self._with_ftp(op)
+        success, result = self._with_ftp(op)
 
-        if result['success']:
+        if success:
             result['status'] = 'done'
             return self._send(ActionTable.STREAM_FILE.value, result)
         result['status'] = 'error'
@@ -1109,13 +1124,19 @@ class GenericFileTransfer:
             logger.info(f"Success: {success} - Output: {output}")
             return success, output
 
-        success, result = self._with_ftp(op)
-        # _with_ftp may wrap exceptions into {'success': False, 'error': ...}
-        msg = f"Permissão {'concedida' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
-        self._send(action, {'success': success, 'status': 'done', 'message': msg})
+        result = self._with_ftp(op)
+
         if isinstance(result, dict):
-            return result.get('success', False), result.get('error', 'unknown error')
-        return True, result
+            success = result.get('success', False)
+            msg = f"Permissão {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
+            self._send(action, {'success': success, 'status': 'done', 'message': msg})
+            return success, result.get('error', 'unknown error')
+
+        # fallback if op() returns tuple-like data
+        success, output = result
+        msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
+        self._send(action, {'success': success, 'status': 'done', 'message': msg})
+        return success, output
 
     def _handle_remote_reboot(self, action) -> tuple:
         """Send 'sudo reboot' to the remote server via SSH.
@@ -1141,14 +1162,19 @@ class GenericFileTransfer:
             logger.info(f"Success: {success} - Output: {output}")
             return success, output
 
-        success, result = self._with_ftp(op)
+        result = self._with_ftp(op)
+
+        if isinstance(result, dict):
+            success = result.get('success', False)
+            msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
+            self._send(action, {'success': success, 'status': 'done', 'message': msg})
+            return success, result.get('error', 'unknown error')
+
+        # fallback if op() returns tuple-like data
+        success, output = result
         msg = f"Reboot {'realizado' if success else 'falhou'} para {self.remote.name} / {self.remote.host}"
         self._send(action, {'success': success, 'status': 'done', 'message': msg})
-
-        # _with_ftp may wrap exceptions into {'success': False, 'error': ...}
-        if isinstance(result, dict):
-            return result.get('success', False), result.get('error', 'unknown error')
-        return success, result
+        return success, output
 
     # --- file and directory streaming ------------------------------------------------
 
@@ -1210,8 +1236,8 @@ class GenericFileTransfer:
                 logger.exception("Error streaming file")
                 return {'success': False, 'error': f'{str(e)}, , {self.name}: {self.host}'}
 
-        result = self._with_ftp(op)
-        if result and result.get('success'):
+        success, result = self._with_ftp(op)
+        if result and success:
             return self._send(ActionTable.FINISH_STREAM_FILE.value, {'status': 'done', 'message': f'Finalizado upload de arquivo para {self.remote.name}: {self.remote.host}'})
         print(f"Upload directory result: {result}", flush=True)
         return result
