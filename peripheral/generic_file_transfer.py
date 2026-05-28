@@ -260,30 +260,40 @@ class GenericFileTransfer:
 
                 if self.io.make_permission_on_upload:
                     self._handle_remote_permission(action)
+                success = True
                 if self.io.send_files:
                     data = message.get('data', {})
                     value = data.get('value', {})
                     local_path = value.get('local_path', '')
                     remote_path = value.get('remote_path', '')
-                    result = self._handle_upload_directory(local_path, remote_path)
-                if self.io.reboot_on_upload:
+                    success, result = self._handle_upload_directory(local_path, remote_path)
+                if success and self.io.reboot_on_upload:
                     logger.info(f"Reboot em: {self.host} - {self.name}")
                     self._handle_remote_reboot(action)
+                elif not success and self.io.reboot_on_upload:
+                    msg = f"Reboot não enviado para {self.remote.name} / {self.remote.host} pois o processo anterior falhou!"
+                    payload = {'success': success, 'status': 'error', 'message': msg, 'error': msg}
+                    self._send(ActionTable.STREAM_FILE.value, payload)
                 else:
                     logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             elif action == ActionTable.STREAM_FILE.value:
                 # reboot server
                 if self.io.make_permission_on_upload:
                     self._handle_remote_permission(action)
+                success = True
                 if self.io.send_files:
                     data = message.get('data', {})
                     value = data.get('value', {})
                     local_path = value.get('local_path', '')
                     remote_path = value.get('remote_path', '')
-                    result = self._handle_upload_file(local_path, remote_path)
-                if self.io.reboot_on_upload:
+                    success, result = self._handle_upload_file(local_path, remote_path)
+                if success and self.io.reboot_on_upload:
                     logger.info(f"Reboot em: {self.host} - {self.name}")
                     self._handle_remote_reboot(action)
+                elif not success and self.io.reboot_on_upload:
+                    msg = f"Reboot não enviado para {self.remote.name} / {self.remote.host} pois o processo anterior falhou!"
+                    payload = {'success': success, 'status': 'error', 'message': msg, 'error': msg}
+                    self._send(ActionTable.STREAM_FILE.value, payload)
                 else:
                     logger.info(f"Nao é necessário reboot em: {self.host} - {self.name}")
             elif action == ActionTable.DOWNLOAD_FILE.value:
@@ -425,7 +435,7 @@ class GenericFileTransfer:
                 logger.debug("Failed to ensure remote dir %s: %s", cur, e)
         return True
 
-    def _handle_upload_directory(self, local_path: str, remote_path: str) -> Dict:
+    def _handle_upload_directory(self, local_path: str, remote_path: str) -> tuple:
 
         self._send(ActionTable.STREAM_FILE.value, {'status': 'start', 'message': f'Iniciando upload de diretório para {self.remote.name}: {self.remote.host}'})
 
@@ -605,7 +615,7 @@ class GenericFileTransfer:
         success, result = self._with_ftp(op)
         print(f"Upload directory result: {result}", flush=True)
 
-        return self._send(ActionTable.STREAM_DIRECTORY.value, result)
+        return success, self._send(ActionTable.STREAM_DIRECTORY.value, result)
 
     # --- file and directory handling ------------------------------------------------
 
@@ -1196,7 +1206,7 @@ class GenericFileTransfer:
 
     # --- file and directory streaming ------------------------------------------------
 
-    def _stream_file(self, local_path: str, remote_path: str, is_upload: bool = True) -> Dict:
+    def _stream_file(self, local_path: str, remote_path: str, is_upload: bool = True) -> tuple:
         """
         Stream a file to or from the remote server.
         """
@@ -1256,11 +1266,11 @@ class GenericFileTransfer:
 
         success, result = self._with_ftp(op)
         if result and success:
-            return self._send(ActionTable.FINISH_STREAM_FILE.value, {'status': 'done', 'message': f'Finalizado upload de arquivo para {self.remote.name}: {self.remote.host}'})
+            return success, self._send(ActionTable.FINISH_STREAM_FILE.value, {'status': 'done', 'message': f'Finalizado upload de arquivo para {self.remote.name}: {self.remote.host}'})
         print(f"Upload directory result: {result}", flush=True)
-        return result
+        return success, result
 
-    def _handle_upload_file(self, local_path: str, remote_path: str) -> Dict:
+    def _handle_upload_file(self, local_path: str, remote_path: str) -> tuple:
         self._send(ActionTable.STREAM_FILE.value, {'status': 'start',
                                                    'message': f'Iniciando upload de arquivo para {self.remote.name}: {self.remote.host}'})
         return self._stream_file(local_path, remote_path, is_upload=True)
