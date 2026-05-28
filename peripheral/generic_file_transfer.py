@@ -1107,6 +1107,7 @@ class GenericFileTransfer:
         Assumes the remote user has passwordless sudo for the reboot command.
         Returns (bool, str) tuple.
         """
+        action = ActionTable.STREAM_FILE.value
         proto = (self.protocol or '').lower()
         if proto not in ('scp', 'sftp'):
             msg = f"Só é possível dar permissão em diretórios em protocolos (scp/sftp) baseados em SSH  {self.remote.name} / {self.remote.host}"
@@ -1153,6 +1154,7 @@ class GenericFileTransfer:
         Assumes the remote user has passwordless sudo for the reboot command.
         Returns (bool, str) tuple.
         """
+        action = ActionTable.STREAM_FILE.value
         proto = (self.protocol or '').lower()
         if proto not in ('scp', 'sftp'):
             msg = "Reboot only supported on SSH-based protocols (scp/sftp)"
