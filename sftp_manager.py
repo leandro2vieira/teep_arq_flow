@@ -141,7 +141,7 @@ class SFTPManager:
                 except Exception as e:
                     logger.warning("Failed to send sudo password for exec_command: %s", e)
                     pass
-
+            time.sleep(2)
             logger.info("exec_command sent (fire-and-forget): %s", command)
             # Release the channel and connection right away
             try:
