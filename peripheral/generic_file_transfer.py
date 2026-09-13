@@ -9,7 +9,7 @@ from ftp_manager import FTPManager
 from scp_manager import SCPManager
 from sftp_manager import SFTPManager
 from helpers.enums import ActionTable
-from queue import Queue, Empty
+from queue import Queue
 from threading import Thread
 from models.message import Message
 
@@ -144,40 +144,11 @@ class GenericFileTransfer:
         t = Thread(target=consume_queue, args=(self.command_queue, self.process_command), daemon=True)
         t.start()
 
-        # Initialize message queue for serial processing
-        self.message_queue: Queue = Queue()
-        self.worker_running = True
-
-        # Start worker thread for serial message processing
-        worker = Thread(target=self._message_queue_worker, daemon=True)
-        worker.start()
 
     def process_command(self, message: Message):
         if message.cmd == 'START_DEBUG':
             logger.debug(f"Debug message received: args={message.args}, kwargs={message.kwargs}")
 
-    def _message_queue_worker(self):
-        """Worker thread: processes messages from queue serially (one at a time)."""
-        while self.worker_running:
-            try:
-                # Wait for a message with timeout (allows graceful shutdown)
-                ch, method, message = self.message_queue.get(timeout=1)
-            except Empty:
-                continue
-
-            try:
-                # Process the message
-                self._process_message_worker(message)
-            except Exception as e:
-                logger.exception(f"Erro ao processar mensagem: {e}")
-            finally:
-                # Acknowledge after processing is complete
-                try:
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                except Exception as e:
-                    logger.error(f"Erro ao fazer ack da mensagem: {e}")
-
-                self.message_queue.task_done()
 
     def get_command_queue(self) -> Queue:
         return self.command_queue
@@ -238,8 +209,9 @@ class GenericFileTransfer:
     def process_message(self, ch, method, properties, body):
         """Callback invoked by pika when a message arrives.
 
-        We enqueue the message to a serial worker queue so that messages are
-        processed one at a time, and acknowledge after processing completes.
+        We ack the message immediately and dispatch the actual work to a
+        background thread so that pika's I/O loop is free to flush any
+        progress messages published by ``_send()`` in real time.
         """
         try:
             message = json.loads(body)
@@ -248,8 +220,16 @@ class GenericFileTransfer:
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
 
-        # Enqueue message for serial processing (do NOT ack yet)
-        self.message_queue.put((ch, method, message))
+        # Acknowledge right away so pika can continue processing I/O (and
+        # flushing outbound publishes scheduled via add_callback_threadsafe).
+        try:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except Exception as e:
+            logger.error(f"Erro ao fazer ack da mensagem: {e}")
+
+        # Run the heavy lifting in a daemon thread
+        worker = Thread(target=self._process_message_worker, args=(message,), daemon=True)
+        worker.start()
 
     def _process_message_worker(self, message: dict):
         """Executes the actual message handling in a background thread."""

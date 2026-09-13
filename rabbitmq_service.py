@@ -9,7 +9,7 @@ import time
 import os
 from queue import Queue
 from peripheral.generic_file_transfer import GenericFileTransfer
-from threading import Thread
+from threading import Thread, RLock
 from models.message import Message
 
 if TYPE_CHECKING:
@@ -68,6 +68,7 @@ class RabbitMQService:
         self.retry_delay = 5
         self.command_queue = command_queue
         self.queue_pool: Dict[str, Queue] = {}
+        self._connection_lock = RLock()
 
         self.rabbitmq_config = config_manager.get('rabbitmq', {
             'host': 'localhost',
@@ -84,31 +85,64 @@ class RabbitMQService:
             'use_tls': False
         })
 
+    def _is_connection_ready(self) -> bool:
+        return bool(
+            self.connection and getattr(self.connection, "is_open", False)
+            and self.channel and getattr(self.channel, "is_open", False)
+        )
+
+    def _close_connection(self):
+        try:
+            if self.channel:
+                try:
+                    self.channel.stop_consuming()
+                except Exception:
+                    pass
+                self.channel = None
+        except Exception:
+            pass
+
+        try:
+            if self.connection and getattr(self.connection, "is_open", False):
+                self.connection.close()
+        except Exception:
+            pass
+        finally:
+            self.connection = None
+            self.channel = None
+
     def connect(self) -> bool:
         """Conecta ao RabbitMQ"""
-        try:
-            credentials = pika.PlainCredentials(
-                self.rabbitmq_config['user'],
-                self.rabbitmq_config['password']
-            )
+        with self._connection_lock:
+            if self._is_connection_ready():
+                return True
 
-            parameters = pika.ConnectionParameters(
-                host=self.rabbitmq_config['host'],
-                port=self.rabbitmq_config['port'],
-                credentials=credentials,
-                heartbeat=30,  # Reduzido de 600 para 30 segundos
-                blocked_connection_timeout=10,  # Timeout para conexões bloqueadas
-                socket_timeout=5  # Timeout para operações de socket
-            )
+            self._close_connection()
 
-            self.connection = pika.BlockingConnection(parameters)
-            self.channel = self.connection.channel()
+            try:
+                credentials = pika.PlainCredentials(
+                    self.rabbitmq_config['user'],
+                    self.rabbitmq_config['password']
+                )
 
-            logger.info("Conectado ao RabbitMQ")
-            return True
-        except Exception as e:
-            logger.error(f"Erro ao conectar RabbitMQ: {e}")
-            return False
+                parameters = pika.ConnectionParameters(
+                    host=self.rabbitmq_config['host'],
+                    port=self.rabbitmq_config['port'],
+                    credentials=credentials,
+                    heartbeat=30,  # Reduzido de 600 para 30 segundos
+                    blocked_connection_timeout=10,  # Timeout para conexões bloqueadas
+                    socket_timeout=5  # Timeout para operações de socket
+                )
+
+                self.connection = pika.BlockingConnection(parameters)
+                self.channel = self.connection.channel()
+
+                logger.info("Conectado ao RabbitMQ")
+                return True
+            except Exception as e:
+                self._close_connection()
+                logger.error(f"Erro ao conectar RabbitMQ: {e}")
+                return False
 
     def declare_queues(self):
         """Declara as filas necessárias"""
@@ -445,14 +479,15 @@ class RabbitMQService:
         return
 
     def send_message(self, message: Dict[str, Any], routing_key: str = None):
-        """Envia uma mensagem para a fila de saída.
+        """Envia uma mensagem para a fila de saída."""
+        with self._connection_lock:
+            if not self._is_connection_ready():
+                logger.warning(
+                    "RabbitMQ indisponível para envio; mensagem descartada: %s",
+                    message if isinstance(message, dict) else str(message)
+                )
+                return
 
-        If called from a thread other than the pika I/O thread we schedule the
-        publish via ``connection.add_callback_threadsafe`` so that the frame is
-        flushed immediately instead of being buffered until the current callback
-        returns.
-        """
-        def _do_publish():
             try:
                 self.channel.basic_publish(
                     exchange='',
@@ -462,18 +497,10 @@ class RabbitMQService:
                 )
                 logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
             except Exception as e:
-                logger.error(f"Erro ao enviar mensagem: {e}")
-
-        try:
-            if self.connection and self.connection.is_open:
-                self.connection.add_callback_threadsafe(_do_publish)
-            else:
-                # fallback: publish directly (best effort)
-                _do_publish()
-        except Exception as e:
-            logger.error(f"Erro ao agendar envio de mensagem: {e}")
-            # last resort fallback
-            _do_publish()
+                logger.exception(f"Erro ao enviar mensagem: {e}")
+                if self.running:
+                    logger.warning("Falha de publish; disparando reconexão do RabbitMQ")
+                    self.reconnect()
 
     def _handle_update_config(self, message: Dict) -> Dict:
         """Atualiza configurações"""
@@ -507,58 +534,24 @@ class RabbitMQService:
 
     def reconnect(self) -> bool:
         """Fecha conecoes existentes e tenta reconectar"""
-        logger.info(f"Tentando reconectar em {self.retry_delay} segundos...")
+        with self._connection_lock:
+            logger.info(f"Tentando reconectar em {self.retry_delay} segundos...")
+            self._close_connection()
 
-        try:
-            if self.channel:
-                try:
-                    self.channel.stop_consuming()
-                except Exception:
-                    pass
-                self.channel = None
+            while self.running:
+                if self.connect():
+                    logger.info("Conexao com o RabbitMQ restabelecida")
+                    return True
+                logger.error(f"Falha ao reconectar. Tentando novamente em {self.retry_delay} segundos...")
+                time.sleep(self.retry_delay)
 
-            if self.connection:
-                try:
-                    self.connection.close()
-                except Exception:
-                    pass
-                self.connection = None
-        except Exception:
-            pass
-
-        while self.running:
-            if self.connect():
-                logger.info("Conexao com o RabbitMQ restabelecida")
-                return True
-            logger.error(f"Falha ao reconectar. Tentando novamente em {self.retry_delay} segundos...")
-            time.sleep(self.retry_delay)
-
-        logger.info("reconexao abortada porque o servico foi parado")
-        return False
+            logger.info("reconexao abortada porque o servico foi parado")
+            return False
 
     def stop(self):
         """Para o serviço"""
-        logger.info("Parando serviço RabbitMQ...")
-        self.running = False
-
-        try:
-            if self.channel:
-                try:
-                    logger.info("Parando consumo de mensagens...")
-                    self.channel.stop_consuming()
-                except Exception as e:
-                    logger.warning(f"Erro ao parar consumo: {e}")
-        except Exception as e:
-            logger.error(f"Erro ao acessar channel durante stop: {e}")
-
-        try:
-            if self.connection and self.connection.is_open:
-                try:
-                    logger.info("Fechando conexão RabbitMQ...")
-                    self.connection.close()
-                except Exception as e:
-                    logger.warning(f"Erro ao fechar conexão: {e}")
-        except Exception as e:
-            logger.error(f"Erro ao acessar connection durante stop: {e}")
-
-        logger.info("Serviço RabbitMQ parado")
+        with self._connection_lock:
+            logger.info("Parando serviço RabbitMQ...")
+            self.running = False
+            self._close_connection()
+            logger.info("Serviço RabbitMQ parado")
