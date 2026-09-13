@@ -9,7 +9,7 @@ import time
 import os
 from queue import Queue
 from peripheral.generic_file_transfer import GenericFileTransfer
-from threading import Thread, RLock
+from threading import Thread, RLock, Event
 from models.message import Message
 
 if TYPE_CHECKING:
@@ -69,6 +69,8 @@ class RabbitMQService:
         self.command_queue = command_queue
         self.queue_pool: Dict[str, Queue] = {}
         self._connection_lock = RLock()
+        self._connect_event = Event()
+        self._io_thread = None
 
         self.rabbitmq_config = config_manager.get('rabbitmq', {
             'host': 'localhost',
@@ -91,6 +93,24 @@ class RabbitMQService:
             and self.channel and getattr(self.channel, "is_open", False)
         )
 
+    def _on_connection_open(self, connection):
+        self.connection = connection
+        self.connection.channel(on_open_callback=self._on_channel_open)
+
+    def _on_channel_open(self, channel):
+        self.channel = channel
+        self._connect_event.set()
+
+    def _on_connection_error(self, _connection, error):
+        logger.error(f"Erro ao abrir conexão RabbitMQ: {error}")
+        self._connect_event.set()
+
+    def _on_connection_closed(self, _connection, reason):
+        logger.warning(f"Conexão RabbitMQ fechada: {reason}")
+        self.connection = None
+        self.channel = None
+        self._connect_event.set()
+
     def _close_connection(self):
         try:
             if self.channel:
@@ -108,15 +128,22 @@ class RabbitMQService:
         except Exception:
             pass
         finally:
+            if self._io_thread and self._io_thread.is_alive() and self.connection and getattr(self.connection, "ioloop", None):
+                try:
+                    self.connection.ioloop.stop()
+                except Exception:
+                    pass
             self.connection = None
             self.channel = None
+            self._connect_event.set()
 
     def connect(self) -> bool:
-        """Conecta ao RabbitMQ"""
+        """Conecta ao RabbitMQ usando SelectConnection"""
         with self._connection_lock:
             if self._is_connection_ready():
                 return True
 
+            self._connect_event.clear()
             self._close_connection()
 
             try:
@@ -129,16 +156,29 @@ class RabbitMQService:
                     host=self.rabbitmq_config['host'],
                     port=self.rabbitmq_config['port'],
                     credentials=credentials,
-                    heartbeat=30,  # Reduzido de 600 para 30 segundos
-                    blocked_connection_timeout=10,  # Timeout para conexões bloqueadas
-                    socket_timeout=5  # Timeout para operações de socket
+                    heartbeat=30,
+                    blocked_connection_timeout=10,
+                    socket_timeout=5,
+                    connection_attempts=3,
+                    retry_delay=1,
                 )
 
-                self.connection = pika.BlockingConnection(parameters)
-                self.channel = self.connection.channel()
+                self.connection = pika.SelectConnection(
+                    parameters,
+                    on_open_callback=self._on_connection_open,
+                    on_open_error_callback=self._on_connection_error,
+                    on_close_callback=self._on_connection_closed,
+                )
+                self._io_thread = Thread(target=self.connection.ioloop.start, daemon=True)
+                self._io_thread.start()
+
+                if not self._connect_event.wait(timeout=15):
+                    logger.error("Timeout ao abrir conexão RabbitMQ")
+                    self._close_connection()
+                    return False
 
                 logger.info("Conectado ao RabbitMQ")
-                return True
+                return self._is_connection_ready()
             except Exception as e:
                 self._close_connection()
                 logger.error(f"Erro ao conectar RabbitMQ: {e}")
@@ -445,14 +485,11 @@ class RabbitMQService:
 
                 logger.info("Serviço RabbitMQ iniciado. Aguardando mensagens...")
 
-                # Use connection.process_data_events() in a loop to allow quick interruption
+                # SelectConnection drives its own event loop in a dedicated thread.
                 while self.running:
                     try:
-                        # process callbacks (from basic_consume) and wait up to 1 second
-                        self.connection.process_data_events(time_limit=1)
-                    except Exception as e:
-                        logger.error(f"Erro durante processamento de eventos: {e}")
-                        # break to trigger reconnect/stop flow
+                        time.sleep(1)
+                    except Exception:
                         break
 
             except KeyboardInterrupt:
@@ -488,19 +525,32 @@ class RabbitMQService:
                 )
                 return
 
+            def _publish():
+                try:
+                    self.channel.basic_publish(
+                        exchange='',
+                        routing_key=routing_key,
+                        body=json.dumps(message),
+                        properties=pika.BasicProperties(delivery_mode=2)
+                    )
+                    logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
+                except Exception as e:
+                    logger.exception(f"Erro ao enviar mensagem: {e}")
+                    if self.running:
+                        logger.warning("Falha de publish; disparando reconexão do RabbitMQ")
+                        self.reconnect()
+
             try:
-                self.channel.basic_publish(
-                    exchange='',
-                    routing_key=routing_key,
-                    body=json.dumps(message),
-                    properties=pika.BasicProperties(delivery_mode=2)
-                )
-                logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
+                if self.connection and hasattr(self.connection, 'add_callback_threadsafe'):
+                    self.connection.add_callback_threadsafe(_publish)
+                else:
+                    _publish()
             except Exception as e:
-                logger.exception(f"Erro ao enviar mensagem: {e}")
-                if self.running:
-                    logger.warning("Falha de publish; disparando reconexão do RabbitMQ")
-                    self.reconnect()
+                logger.error(f"Erro ao agendar envio de mensagem: {e}")
+                try:
+                    _publish()
+                except Exception:
+                    pass
 
     def _handle_update_config(self, message: Dict) -> Dict:
         """Atualiza configurações"""
