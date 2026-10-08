@@ -9,7 +9,7 @@ import time
 import os
 from queue import Queue
 from peripheral.generic_file_transfer import GenericFileTransfer
-from threading import Thread, RLock, Event
+from threading import Thread, RLock, Event, current_thread
 from models.message import Message
 
 if TYPE_CHECKING:
@@ -101,41 +101,49 @@ class RabbitMQService:
         self.channel = channel
         self._connect_event.set()
 
-    def _on_connection_error(self, _connection, error):
+    def _on_connection_error(self, connection, error):
         logger.error(f"Erro ao abrir conexão RabbitMQ: {error}")
+        self._stop_ioloop(connection)
         self._connect_event.set()
 
-    def _on_connection_closed(self, _connection, reason):
+    def _on_connection_closed(self, connection, reason):
         logger.warning(f"Conexão RabbitMQ fechada: {reason}")
-        self.connection = None
-        self.channel = None
-        self._connect_event.set()
-
-    def _close_connection(self):
-        try:
-            if self.channel:
-                try:
-                    self.channel.stop_consuming()
-                except Exception:
-                    pass
-                self.channel = None
-        except Exception:
-            pass
-
-        try:
-            if self.connection and getattr(self.connection, "is_open", False):
-                self.connection.close()
-        except Exception:
-            pass
-        finally:
-            if self._io_thread and self._io_thread.is_alive() and self.connection and getattr(self.connection, "ioloop", None):
-                try:
-                    self.connection.ioloop.stop()
-                except Exception:
-                    pass
+        # Ignora fechamento tardio de uma conexão antiga já substituída
+        if self.connection is connection or self.connection is None:
             self.connection = None
             self.channel = None
-            self._connect_event.set()
+        self._stop_ioloop(connection)
+        self._connect_event.set()
+
+    @staticmethod
+    def _stop_ioloop(connection):
+        try:
+            ioloop = connection.ioloop
+            ioloop.add_callback_threadsafe(ioloop.stop)
+        except Exception:
+            pass
+
+    def _close_connection(self):
+        conn = self.connection
+        self.connection = None
+        self.channel = None
+        self.consumed_queues.clear()
+
+        if conn is not None:
+            try:
+                ioloop = conn.ioloop
+                if getattr(conn, "is_open", False):
+                    # close() deve rodar na thread do ioloop; o callback de close para o loop
+                    ioloop.add_callback_threadsafe(conn.close)
+                else:
+                    ioloop.add_callback_threadsafe(ioloop.stop)
+            except Exception:
+                pass
+
+        io_thread = self._io_thread
+        if io_thread and io_thread.is_alive() and io_thread is not current_thread():
+            io_thread.join(timeout=3)
+        self._connect_event.set()
 
     def connect(self) -> bool:
         """Conecta ao RabbitMQ usando SelectConnection"""
@@ -471,6 +479,9 @@ class RabbitMQService:
         """Inicia o serviço"""
         self.running = True
 
+        # Consumidor da fila de comandos é independente da conexão: inicia uma única vez
+        Thread(target=consume_queue, args=(self.command_queue, self.route_to_next_queue), daemon=True).start()
+
         while self.running:
             if not self.connect():
                 logger.error(f"Falha ao iniciar serviço RabbitMQ, tentar novamente em {self.retry_delay} segundos...")
@@ -480,17 +491,16 @@ class RabbitMQService:
             try:
                 self.declare_queues()
 
-                t = Thread(target=consume_queue, args=(self.command_queue, self.route_to_next_queue), daemon=True)
-                t.start()
-
                 logger.info("Serviço RabbitMQ iniciado. Aguardando mensagens...")
 
-                # SelectConnection drives its own event loop in a dedicated thread.
-                while self.running:
-                    try:
-                        time.sleep(1)
-                    except Exception:
-                        break
+                # Monitora a conexão; ao cair, sai do loop e reconecta
+                while self.running and self._is_connection_ready():
+                    time.sleep(1)
+
+                if self.running:
+                    logger.warning("Conexão RabbitMQ perdida; reconectando em %s s", self.retry_delay)
+                    self._close_connection()
+                    time.sleep(self.retry_delay)
 
             except KeyboardInterrupt:
                 logger.info("KeyboardInterrupt recebido, parando serviço...")
@@ -501,7 +511,8 @@ class RabbitMQService:
             except Exception as e:
                 logger.error(f"Erro no serviço RabbitMQ: {e}")
                 if self.running:
-                    self.reconnect()
+                    self._close_connection()
+                    time.sleep(self.retry_delay)
             finally:
                 if not self.running:
                     break
@@ -513,7 +524,9 @@ class RabbitMQService:
         then tries to connect once and redeclare queues. Returns True on success.
         """
         logger.info("Forcing RabbitMQ reconnection now...")
-        return
+        # O loop de start() detecta a queda e refaz conexão e filas
+        self._close_connection()
+        return True
 
     def send_message(self, message: Dict[str, Any], routing_key: str = None):
         """Envia uma mensagem para a fila de saída."""
@@ -536,9 +549,6 @@ class RabbitMQService:
                     logger.info(f"Mensagem enviada: {message.get('action', 'unknown')}")
                 except Exception as e:
                     logger.exception(f"Erro ao enviar mensagem: {e}")
-                    if self.running:
-                        logger.warning("Falha de publish; disparando reconexão do RabbitMQ")
-                        self.reconnect()
 
             try:
                 if self.connection and hasattr(self.connection, 'add_callback_threadsafe'):
